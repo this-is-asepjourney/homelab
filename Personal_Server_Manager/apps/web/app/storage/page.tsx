@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import Link from 'next/link';
 import {
   Database,
   Download,
@@ -20,12 +21,16 @@ import {
   Check,
   Cloud,
   Server,
+  Link2,
+  Rocket,
+  Activity,
 } from 'lucide-react';
 import { api, formatBytes } from '../../lib/api';
 
 export default function StoragePage() {
   const [backups, setBackups] = useState<any[]>([]);
   const [storageStats, setStorageStats] = useState<any>(null);
+  const [dbOverview, setDbOverview] = useState<any>(null);
   const [creating, setCreating] = useState(false);
   const [loading, setLoading] = useState(true);
   const [copiedSnippet, setCopiedSnippet] = useState<string | null>(null);
@@ -40,13 +45,17 @@ export default function StoragePage() {
   const loadData = async () => {
     try {
       setLoading(true);
-      const [list, stats] = await Promise.all([
+      const [list, stats, dbOv] = await Promise.all([
         api.getBackups().catch(() => []),
         api.getStorageTelemetry().catch(() => null),
+        api.getDatabasesOverview().catch(() => null),
       ]);
       setBackups(list);
       if (stats) {
         setStorageStats(stats);
+      }
+      if (dbOv) {
+        setDbOverview(dbOv);
       }
     } catch (err) {
       console.error(err);
@@ -519,6 +528,160 @@ S3_BUCKET_NAME=homelab-storage`
           </pre>
         </div>
       </div>
+
+      {/* Database Server & Project Terhubung */}
+      {(() => {
+        const dbList: any[] = dbOverview?.databases || [];
+        const dbSummary = dbOverview?.summary;
+        const activeRunningCount = dbList.reduce((acc, item) => acc + (item.running_projects_count || 0), 0);
+
+        return (
+          <div className="rounded-xl border border-border bg-card overflow-hidden">
+            <div className="p-4 border-b border-border flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-lg bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
+                  <Link2 className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-sm text-foreground">Database Server &amp; Project Terhubung</h3>
+                  <p className="text-xs text-gray-400">
+                    Daftar database PostgreSQL, MySQL, &amp; SQLite beserta keterhubungannya dengan project yang dideploy.
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 flex-wrap text-[11px] font-mono">
+                <span className="px-2.5 py-1 rounded-full bg-background border border-border text-gray-300">
+                  Total DB: <strong className="text-foreground">{dbSummary?.total_databases ?? dbList.length}</strong>
+                </span>
+                <span className="px-2.5 py-1 rounded-full bg-blue-500/10 border border-blue-500/20 text-blue-400">
+                  Terhubung Project: <strong>{dbSummary?.connected_databases ?? 0}</strong>
+                </span>
+                <span className="px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
+                  Container Aktif: <strong>{activeRunningCount}</strong>
+                </span>
+              </div>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-background/60 text-gray-400 uppercase tracking-wider border-b border-border">
+                  <tr>
+                    <th className="p-3.5">Database</th>
+                    <th className="p-3.5">Engine</th>
+                    <th className="p-3.5">Host</th>
+                    <th className="p-3.5">Size &amp; Tables</th>
+                    <th className="p-3.5">Sesi</th>
+                    <th className="p-3.5">Status Koneksi</th>
+                    <th className="p-3.5">Project Ter-deploy Terhubung</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {dbList.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="p-8 text-center text-gray-500">
+                        {loading ? 'Memuat daftar database & project...' : 'Belum ada database atau project database yang terdeteksi.'}
+                      </td>
+                    </tr>
+                  ) : (
+                    dbList.map((dbItem) => {
+                      const connectedProjects: any[] = dbItem.connected_projects || [];
+                      const hasRunning = (dbItem.running_projects_count || 0) > 0;
+                      const hasLinked = connectedProjects.length > 0;
+                      const engineLabel =
+                        dbItem.db_type === 'mysql'
+                          ? 'MySQL'
+                          : dbItem.db_type === 'sqlite'
+                          ? 'SQLite'
+                          : 'PostgreSQL';
+                      const engineCls =
+                        dbItem.db_type === 'mysql'
+                          ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+                          : dbItem.db_type === 'sqlite'
+                          ? 'bg-purple-500/10 text-purple-400 border-purple-500/20'
+                          : 'bg-blue-500/10 text-blue-400 border-blue-500/20';
+
+                      return (
+                        <tr key={`${dbItem.db_type}:${dbItem.db_name}`} className="hover:bg-gray-500/5 transition-colors">
+                          <td className="p-3.5 font-mono">
+                            <div className="font-semibold text-foreground">{dbItem.db_name}</div>
+                            {!dbItem.exists_on_server && (
+                              <div className="text-[10px] text-amber-400 mt-0.5">Belum terverifikasi / belum dibuat di server</div>
+                            )}
+                          </td>
+                          <td className="p-3.5">
+                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold border ${engineCls}`}>
+                              {engineLabel}
+                            </span>
+                          </td>
+                          <td className="p-3.5 font-mono text-gray-400">
+                            {dbItem.db_type === 'sqlite' ? 'localhost' : `${dbItem.host}:${dbItem.port}`}
+                          </td>
+                          <td className="p-3.5 font-mono text-gray-300">
+                            {formatBytes(dbItem.size_bytes || 0)} &bull;{' '}
+                            {dbItem.db_type === 'postgres' && dbItem.tables_count === 0
+                              ? '—'
+                              : `${dbItem.tables_count ?? 0} tbl`}
+                          </td>
+                          <td className="p-3.5 font-mono text-gray-300">
+                            <span className="inline-flex items-center gap-1">
+                              <Activity className="w-3 h-3 text-blue-400" />
+                              {dbItem.active_connections ?? 0}
+                            </span>
+                          </td>
+                          <td className="p-3.5">
+                            {hasRunning ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                                Terhubung (Running)
+                              </span>
+                            ) : hasLinked ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase bg-blue-500/10 text-blue-400 border border-blue-500/20">
+                                Terkait (Standby)
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase bg-gray-500/10 text-gray-400 border border-border">
+                                Belum Terhubung Project
+                              </span>
+                            )}
+                          </td>
+                          <td className="p-3.5">
+                            {connectedProjects.length > 0 ? (
+                              <div className="flex flex-wrap gap-1.5">
+                                {connectedProjects.map((cp) => (
+                                  <Link
+                                    key={cp.id}
+                                    href={`/projects/${cp.id}`}
+                                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border font-mono text-[11px] transition-colors ${
+                                      cp.container_running
+                                        ? 'border-emerald-500/30 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300'
+                                        : 'border-border bg-background hover:border-blue-500/40 text-gray-300'
+                                    }`}
+                                    title={`${cp.framework} • ${cp.domain} • Port ${cp.port_mappings}`}
+                                  >
+                                    <span
+                                      className={`w-1.5 h-1.5 rounded-full ${
+                                        cp.container_running ? 'bg-emerald-400 animate-pulse' : 'bg-gray-500'
+                                      }`}
+                                    />
+                                    <span className="font-semibold">{cp.name}</span>
+                                    <Rocket className="w-3 h-3 opacity-70" />
+                                  </Link>
+                                ))}
+                              </div>
+                            ) : (
+                              <span className="text-gray-500 text-[11px]">—</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Snapshot Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-5">

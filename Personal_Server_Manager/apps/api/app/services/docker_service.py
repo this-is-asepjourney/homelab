@@ -36,6 +36,50 @@ def decode_docker_stream(data: bytes) -> str:
 
 
 class DockerEngineService:
+    _SAFE_DB_ENV_KEYS = {
+        "DB_CONNECTION", "DB_HOST", "DB_PORT", "DB_DATABASE", "DB_NAME",
+        "DB_USERNAME", "DB_USER", "MYSQL_HOST", "MYSQL_PORT", "MYSQL_DATABASE",
+        "MYSQL_USER", "POSTGRES_HOST", "POSTGRES_PORT", "POSTGRES_DB",
+        "POSTGRES_USER", "SQLITE_DATABASE", "SQLITE_DB_PATH", "APP_ENV", "APP_URL",
+    }
+
+    @classmethod
+    def _extract_safe_db_env(cls, env_list: List[str]) -> Dict[str, str]:
+        safe_env: Dict[str, str] = {}
+        for entry in env_list or []:
+            if not isinstance(entry, str) or "=" not in entry:
+                continue
+            k, v = entry.split("=", 1)
+            clean_k = k.strip()
+            if clean_k in cls._SAFE_DB_ENV_KEYS:
+                safe_env[clean_k] = v
+        return safe_env
+
+    @classmethod
+    def _parse_inspect_payload(cls, data: Dict[str, Any]) -> Dict[str, Any]:
+        state = data.get("State", {})
+        net_settings = data.get("NetworkSettings", {})
+        config = data.get("Config", {})
+        return {
+            "id": data.get("Id", "")[:12],
+            "full_id": data.get("Id", ""),
+            "name": data.get("Name", "").lstrip("/"),
+            "image": config.get("Image", ""),
+            "state": state.get("Status", "unknown"),
+            "running": state.get("Running", False),
+            "restarting": state.get("Restarting", False),
+            "oom_killed": state.get("OOMKilled", False),
+            "dead": state.get("Dead", False),
+            "exit_code": state.get("ExitCode"),
+            "error": state.get("Error", ""),
+            "started_at": state.get("StartedAt", ""),
+            "finished_at": state.get("FinishedAt", ""),
+            "ports": net_settings.get("Ports", {}),
+            "ip_address": net_settings.get("IPAddress", ""),
+            "networks": list((net_settings.get("Networks") or {}).keys()),
+            "db_env": cls._extract_safe_db_env(config.get("Env") or []),
+        }
+
     @classmethod
     def is_socket_available(cls) -> bool:
         return os.path.exists(DOCKER_SOCKET_PATH)
@@ -109,32 +153,13 @@ class DockerEngineService:
 
     @classmethod
     def inspect_container(cls, cid_or_name: str) -> Dict[str, Any]:
-        """Inspect detailed container state (exit code, health, started_at, finished_at, error)."""
+        """Inspect detailed container state (exit code, health, started_at, finished_at, error, networks, safe db_env)."""
         client = cls._get_uds_client()
         if client:
             try:
                 resp = client.get(f"/containers/{cid_or_name}/json")
                 if resp.status_code == 200:
-                    data = resp.json()
-                    state = data.get("State", {})
-                    net_settings = data.get("NetworkSettings", {})
-                    return {
-                        "id": data.get("Id", "")[:12],
-                        "full_id": data.get("Id", ""),
-                        "name": data.get("Name", "").lstrip("/"),
-                        "image": data.get("Config", {}).get("Image", ""),
-                        "state": state.get("Status", "unknown"),
-                        "running": state.get("Running", False),
-                        "restarting": state.get("Restarting", False),
-                        "oom_killed": state.get("OOMKilled", False),
-                        "dead": state.get("Dead", False),
-                        "exit_code": state.get("ExitCode"),
-                        "error": state.get("Error", ""),
-                        "started_at": state.get("StartedAt", ""),
-                        "finished_at": state.get("FinishedAt", ""),
-                        "ports": net_settings.get("Ports", {}),
-                        "ip_address": net_settings.get("IPAddress", ""),
-                    }
+                    return cls._parse_inspect_payload(resp.json())
             except Exception as e:
                 logger.warning("UDS inspect error for %s: %s", cid_or_name, e)
 
@@ -150,26 +175,7 @@ class DockerEngineService:
             if res.returncode == 0:
                 data = json.loads(res.stdout)
                 if data:
-                    item = data[0]
-                    state = item.get("State", {})
-                    net = item.get("NetworkSettings", {})
-                    return {
-                        "id": item.get("Id", "")[:12],
-                        "full_id": item.get("Id", ""),
-                        "name": item.get("Name", "").lstrip("/"),
-                        "image": item.get("Config", {}).get("Image", ""),
-                        "state": state.get("Status", "unknown"),
-                        "running": state.get("Running", False),
-                        "restarting": state.get("Restarting", False),
-                        "oom_killed": state.get("OOMKilled", False),
-                        "dead": state.get("Dead", False),
-                        "exit_code": state.get("ExitCode"),
-                        "error": state.get("Error", ""),
-                        "started_at": state.get("StartedAt", ""),
-                        "finished_at": state.get("FinishedAt", ""),
-                        "ports": net.get("Ports", {}),
-                        "ip_address": net.get("IPAddress", ""),
-                    }
+                    return cls._parse_inspect_payload(data[0])
         except Exception:
             pass
         return {}

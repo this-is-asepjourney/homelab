@@ -510,3 +510,173 @@ def test_project_access_urls_and_sync_domain(client):
     assert sync_dom_data["domain"] == "pos-main.homelab"
     assert sync_dom_data["target_port"] == 3100
     assert sync_dom_data["access_urls"]["lan_ip"] == "http://192.168.25.105:3100"
+
+
+def test_project_environment_crud_and_reveal(client):
+    token = get_auth_token(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    server_id = client.get("/api/v1/servers", headers=headers).json()[0]["id"]
+
+    proj_res = client.post(
+        "/api/v1/projects",
+        json={
+            "server_id": server_id,
+            "name": "env-crud-app",
+            "framework": "Laravel",
+            "source_type": "git",
+            "repository_url": "https://github.com/example/env-crud-app.git",
+            "db_type": "none",
+            "auto_provision_db": False,
+            "auto_deploy": False,
+            "environment_variables": [
+                {"key": "APP_ENV", "value": "production"},
+                {"key": "APP_SECRET", "value": "super_secret_token_987"},
+            ],
+        },
+        headers=headers,
+    )
+    assert proj_res.status_code == 200
+    pid = proj_res.json()["id"]
+
+    # 1. Default (reveal=false) masks values and keeps plaintext value=None
+    masked_res = client.get(f"/api/v1/projects/{pid}/environment", headers=headers)
+    assert masked_res.status_code == 200
+    masked_map = {item["key"]: item for item in masked_res.json()}
+    assert masked_map["APP_SECRET"]["value"] is None
+    assert masked_map["APP_SECRET"]["masked_value"] == "su****87"
+
+    # 2. reveal=true returns decrypted plaintext values for owner/admin
+    reveal_res = client.get(f"/api/v1/projects/{pid}/environment?reveal=true", headers=headers)
+    assert reveal_res.status_code == 200
+    reveal_map = {item["key"]: item for item in reveal_res.json()}
+    assert reveal_map["APP_ENV"]["value"] == "production"
+    assert reveal_map["APP_SECRET"]["value"] == "super_secret_token_987"
+
+    # 3. Single-item upsert updates/adds without corrupting other existing secrets
+    up_add = client.post(
+        f"/api/v1/projects/{pid}/environment/item",
+        json={"key": "APP_URL", "value": "http://100.78.113.53:3101"},
+        headers=headers,
+    )
+    assert up_add.status_code == 200
+    assert up_add.json()["key"] == "APP_URL"
+    assert up_add.json()["value"] == "http://100.78.113.53:3101"
+
+    up_edit = client.post(
+        f"/api/v1/projects/{pid}/environment/item",
+        json={"key": "APP_ENV", "value": "local", "original_key": "APP_ENV"},
+        headers=headers,
+    )
+    assert up_edit.status_code == 200
+
+    # Verify untouched APP_SECRET still has full plaintext value
+    after_edit = client.get(f"/api/v1/projects/{pid}/environment?reveal=true", headers=headers).json()
+    after_map = {item["key"]: item["value"] for item in after_edit}
+    assert after_map == {
+        "APP_ENV": "local",
+        "APP_SECRET": "super_secret_token_987",
+        "APP_URL": "http://100.78.113.53:3101",
+    }
+
+    # 4. Rename key via original_key cleanly removes old key and keeps APP_SECRET intact
+    rename_res = client.post(
+        f"/api/v1/projects/{pid}/environment/item",
+        json={"key": "PUBLIC_BASE_URL", "value": "http://env-crud-app.homelab", "original_key": "APP_URL"},
+        headers=headers,
+    )
+    assert rename_res.status_code == 200
+    rename_map = {
+        i["key"]: i["value"]
+        for i in client.get(f"/api/v1/projects/{pid}/environment?reveal=true", headers=headers).json()
+    }
+    assert "APP_URL" not in rename_map
+    assert rename_map["PUBLIC_BASE_URL"] == "http://env-crud-app.homelab"
+    assert rename_map["APP_SECRET"] == "super_secret_token_987"
+
+    # 5. Delete single key removes only that key
+    del_res = client.delete(f"/api/v1/projects/{pid}/environment/PUBLIC_BASE_URL", headers=headers)
+    assert del_res.status_code == 200
+    post_del_map = {
+        i["key"]: i["value"]
+        for i in client.get(f"/api/v1/projects/{pid}/environment?reveal=true", headers=headers).json()
+    }
+    assert post_del_map == {"APP_ENV": "local", "APP_SECRET": "super_secret_token_987"}
+
+    # 6. Bulk PUT replaces set cleanly
+    bulk_res = client.put(
+        f"/api/v1/projects/{pid}/environment",
+        json={
+            "variables": [
+                {"key": "APP_ENV", "value": "staging"},
+                {"key": "LOG_LEVEL", "value": "debug"},
+            ]
+        },
+        headers=headers,
+    )
+    assert bulk_res.status_code == 200
+    assert bulk_res.json()["count"] == 2
+    bulk_map = {
+        i["key"]: i["value"]
+        for i in client.get(f"/api/v1/projects/{pid}/environment?reveal=true", headers=headers).json()
+    }
+    assert bulk_map == {"APP_ENV": "staging", "LOG_LEVEL": "debug"}
+
+
+def test_project_database_connection_and_overview(client):
+    token = get_auth_token(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    server_id = client.get("/api/v1/servers", headers=headers).json()[0]["id"]
+
+    proj_res = client.post(
+        "/api/v1/projects",
+        json={
+            "server_id": server_id,
+            "name": "umkm-storefront",
+            "framework": "Laravel",
+            "source_type": "git",
+            "repository_url": "https://github.com/example/umkm-storefront.git",
+            "db_type": "mysql",
+            "database_name": "umkm_conn_test",
+            "auto_provision_db": True,
+            "auto_deploy": False,
+        },
+        headers=headers,
+    )
+    assert proj_res.status_code == 200
+    pid = proj_res.json()["id"]
+
+    # Check per-project database endpoint returns deployment_connection & connected_projects
+    db_res = client.get(f"/api/v1/projects/{pid}/database", headers=headers)
+    assert db_res.status_code == 200
+    db_data = db_res.json()
+    assert db_data["db_type"] == "mysql"
+    assert db_data["db_name"] == "umkm_conn_test"
+
+    dep_conn = db_data["deployment_connection"]
+    for field in (
+        "status",
+        "is_connected",
+        "summary",
+        "container_exists",
+        "container_running",
+        "env_db_name",
+        "env_matches_database",
+        "active_db_sessions",
+    ):
+        assert field in dep_conn
+    assert dep_conn["env_db_name"] == "umkm_conn_test"
+    assert dep_conn["env_matches_database"] is True
+
+    connected = db_data["connected_projects"]
+    assert any(cp["id"] == pid and cp["is_current_project"] is True for cp in connected)
+
+    # Check global /databases/overview maps umkm_conn_test to the deployed project record
+    ov_res = client.get("/api/v1/projects/databases/overview", headers=headers)
+    assert ov_res.status_code == 200
+    ov_data = ov_res.json()
+    assert ov_data["summary"]["total_databases"] >= 1
+    matching_dbs = [
+        d for d in ov_data["databases"] if d["db_type"] == "mysql" and d["db_name"] == "umkm_conn_test"
+    ]
+    assert len(matching_dbs) == 1
+    assert any(cp["id"] == pid for cp in matching_dbs[0]["connected_projects"])

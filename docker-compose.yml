@@ -252,6 +252,11 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-wokeh123}
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_USER: ${MYSQL_USER:-fadb}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-wokeh123}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-wokeh123}
       DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-fadb}:${POSTGRES_PASSWORD:-wokeh123}@postgres:5432/psm
       STORAGE_BASE_DIR: /opt/psm
       UPLOAD_DIR: /opt/psm/uploads
@@ -293,6 +298,12 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-wokeh123}
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_USER: ${MYSQL_USER:-fadb}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-wokeh123}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-wokeh123}
+      HOST_IP: ${SERVER_LAN_IP:-192.168.25.105}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - psm_storage:/opt/psm

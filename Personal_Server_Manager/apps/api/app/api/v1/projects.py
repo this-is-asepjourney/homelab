@@ -1,7 +1,7 @@
 import os
 import re
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from apps.api.app.core.config import settings
@@ -25,6 +25,7 @@ from apps.api.app.schemas.all_schemas import (
     ProjectDatabaseProvisionRequest,
     DockerfileGenerateRequest,
     DockerfileUpdateRequest,
+    EnvironmentVariableUpsertRequest,
     EnvironmentUpdateRequest,
     EnvironmentItemResponse,
     DeploymentResponse,
@@ -50,6 +51,7 @@ from apps.api.app.services.db_provision_service import (
     build_mysql_env_vars,
     build_sqlite_env_vars,
     list_all_postgres_databases,
+    list_all_mysql_databases,
 )
 
 router = APIRouter(prefix="/projects", tags=["Project Management"])
@@ -77,6 +79,104 @@ def sanitize_git_url_and_branch(repo_url: Optional[str], branch: Optional[str]) 
     return clean_url, (clean_branch or "main")
 
 _IPV4_RE = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}$")
+_ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*$")
+_SAFE_DB_ENV_KEYS = {
+    "DB_CONNECTION", "DB_HOST", "DB_PORT", "DB_DATABASE", "DB_NAME",
+    "DB_USERNAME", "DB_USER", "MYSQL_HOST", "MYSQL_PORT", "MYSQL_DATABASE",
+    "MYSQL_USER", "POSTGRES_HOST", "POSTGRES_PORT", "POSTGRES_DB",
+    "POSTGRES_USER", "SQLITE_DATABASE", "SQLITE_DB_PATH",
+}
+
+
+def _normalize_db_engine(db_type: Optional[str]) -> str:
+    val = (db_type or "postgres").strip().lower()
+    if val in ("mysql", "mariadb"):
+        return "mysql"
+    if val == "sqlite":
+        return "sqlite"
+    if val in ("none", "stateless", "false"):
+        return "none"
+    return "postgres"
+
+
+def _get_safe_project_env_map(db: Session, project_id: str) -> Dict[str, str]:
+    """Decrypt only non-secret DB metadata keys for inspection and matching."""
+    rows = (
+        db.query(EnvironmentVariable)
+        .filter(
+            EnvironmentVariable.project_id == project_id,
+            EnvironmentVariable.key.in_(_SAFE_DB_ENV_KEYS),
+        )
+        .all()
+    )
+    safe_map: Dict[str, str] = {}
+    for item in rows:
+        try:
+            safe_map[item.key] = decrypt_secret(item.encrypted_value)
+        except Exception:
+            pass
+    return safe_map
+
+
+def _inspect_project_runtime(p: Project, db: Session) -> Dict[str, Any]:
+    """Inspect Docker container status/networks/non-secret DB env and latest deployment for a project."""
+    latest_dep = (
+        db.query(Deployment)
+        .filter(Deployment.project_id == p.id)
+        .order_by(Deployment.version.desc())
+        .first()
+    )
+    runtime: Dict[str, Any] = {
+        "container_exists": False,
+        "container_running": False,
+        "container_name": p.name,
+        "container_state": "not_created",
+        "container_networks": [],
+        "container_db_env": {},
+        "latest_deployment_version": latest_dep.version if latest_dep else None,
+        "latest_deployment_status": latest_dep.status if latest_dep else None,
+    }
+    try:
+        from apps.api.app.services.docker_service import DockerEngineService
+
+        matched = DockerEngineService.find_container_by_project(p.name, p.id)
+        if matched:
+            cid = matched.get("full_id") or matched.get("docker_id") or matched.get("name")
+            inspected = DockerEngineService.inspect_container(cid) if cid else {}
+            runtime["container_exists"] = True
+            runtime["container_name"] = inspected.get("name") or matched.get("name") or p.name
+            runtime["container_state"] = inspected.get("state") or matched.get("state") or "unknown"
+            runtime["container_running"] = bool(
+                inspected.get("running", "Up" in str(matched.get("status", "")))
+            )
+            runtime["container_networks"] = inspected.get("networks") or []
+            runtime["container_db_env"] = inspected.get("db_env") or {}
+    except Exception:
+        pass
+    return runtime
+
+
+def _build_connected_project_entry(
+    p: Project,
+    runtime: Dict[str, Any],
+    current_project_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    return {
+        "id": p.id,
+        "name": p.name,
+        "framework": p.framework,
+        "status": p.status,
+        "domain": resolve_effective_domain(p.domain, p.name),
+        "port_mappings": p.port_mappings or "3000:3000",
+        "container_exists": bool(runtime.get("container_exists", False)),
+        "container_name": runtime.get("container_name") or p.name,
+        "container_running": bool(runtime.get("container_running", False)),
+        "container_state": runtime.get("container_state") or "not_created",
+        "container_networks": runtime.get("container_networks") or [],
+        "latest_deployment_version": runtime.get("latest_deployment_version"),
+        "latest_deployment_status": runtime.get("latest_deployment_status"),
+        "is_current_project": bool(current_project_id and p.id == current_project_id),
+    }
 
 
 def _resolve_server_ips(server: Optional[Server]) -> Tuple[str, Optional[str]]:
@@ -204,6 +304,113 @@ def sync_all_domains_endpoint(
 ):
     """Synchronize all registered projects' domains and virtual hosts to PAP DNS & Ingress Router."""
     return sync_all_project_domains(db)
+
+
+@router.get("/databases/list")
+def get_all_postgres_databases(
+    current_user: User = Depends(get_current_user),
+):
+    """List all databases present on the PostgreSQL server."""
+    return {"databases": list_all_postgres_databases()}
+
+
+@router.get("/databases/overview")
+def get_databases_overview(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Return PostgreSQL, MySQL, and SQLite databases mapped to connected PSM projects and live containers."""
+    db_entries: Dict[Tuple[str, str], Dict[str, Any]] = {}
+
+    for item in list_all_postgres_databases():
+        name = str(item.get("db_name") or "")
+        if not name:
+            continue
+        db_entries[("postgres", name.lower())] = {
+            "db_type": "postgres",
+            "db_name": name,
+            "host": item.get("host") or settings.POSTGRES_HOST or "postgres",
+            "port": int(item.get("port") or 5432),
+            "size_bytes": int(item.get("size_bytes") or 0),
+            "tables_count": int(item.get("tables_count") or 0),
+            "active_connections": int(item.get("active_connections") or 0),
+            "exists_on_server": True,
+            "connected_projects": [],
+        }
+
+    for item in list_all_mysql_databases():
+        name = str(item.get("db_name") or "")
+        if not name:
+            continue
+        db_entries[("mysql", name.lower())] = {
+            "db_type": "mysql",
+            "db_name": name,
+            "host": item.get("host") or os.getenv("MYSQL_HOST", "mysql"),
+            "port": int(item.get("port") or 3306),
+            "size_bytes": int(item.get("size_bytes") or 0),
+            "tables_count": int(item.get("tables_count") or 0),
+            "active_connections": int(item.get("active_connections") or 0),
+            "exists_on_server": True,
+            "connected_projects": [],
+        }
+
+    projects = db.query(Project).order_by(Project.created_at.desc()).all()
+    for proj in projects:
+        engine = _normalize_db_engine(proj.db_type)
+        if engine == "none":
+            continue
+        safe_env = _get_safe_project_env_map(db, proj.id)
+        resolved_name = resolve_project_db_name(proj, safe_env)
+        runtime = _inspect_project_runtime(proj, db)
+        entry_key = (engine, resolved_name.lower())
+        if entry_key not in db_entries:
+            db_entries[entry_key] = {
+                "db_type": engine,
+                "db_name": resolved_name,
+                "host": (
+                    "localhost"
+                    if engine == "sqlite"
+                    else (os.getenv("MYSQL_HOST", "mysql") if engine == "mysql" else (settings.POSTGRES_HOST or "postgres"))
+                ),
+                "port": 0 if engine == "sqlite" else (3306 if engine == "mysql" else 5432),
+                "size_bytes": 0,
+                "tables_count": 0,
+                "active_connections": 0,
+                "exists_on_server": False,
+                "connected_projects": [],
+            }
+        db_entries[entry_key]["connected_projects"].append(_build_connected_project_entry(proj, runtime))
+
+    db_list: List[Dict[str, Any]] = []
+    for entry in db_entries.values():
+        connected = entry["connected_projects"]
+        entry["connected_projects_count"] = len(connected)
+        entry["running_projects_count"] = sum(1 for cp in connected if cp.get("container_running"))
+        entry["has_active_deployment"] = len(connected) > 0
+        db_list.append(entry)
+
+    db_list.sort(
+        key=lambda d: (
+            -(1 if d["running_projects_count"] > 0 else 0),
+            -d["connected_projects_count"],
+            d["db_type"],
+            (d["db_name"] or "").lower(),
+        )
+    )
+
+    return {
+        "databases": db_list,
+        "summary": {
+            "total_databases": len(db_list),
+            "connected_databases": sum(1 for d in db_list if d["connected_projects_count"] > 0),
+            "active_deployed_links": sum(d["connected_projects_count"] for d in db_list),
+            "engines": {
+                "postgres": sum(1 for d in db_list if d["db_type"] == "postgres"),
+                "mysql": sum(1 for d in db_list if d["db_type"] == "mysql"),
+                "sqlite": sum(1 for d in db_list if d["db_type"] == "sqlite"),
+            },
+        },
+    }
 
 
 @router.post("", response_model=ProjectResponse)
@@ -434,9 +641,9 @@ async def execute_project_redeploy(
     db.add(initial_log)
     db.commit()
 
-    # Auto-provision & auto-connect database respecting explicit db_type
+    # Auto-provision DB if missing while preserving user-edited environment variables
     db_info, env_vars = provision_and_sync_project_db(
-        db, project, custom_db_name=project.db_name, db_type=project.db_type, override_existing_env=True
+        db, project, custom_db_name=project.db_name, db_type=project.db_type, override_existing_env=False
     )
 
     # Collect all stored decrypted environment variables
@@ -704,6 +911,7 @@ def delete_project(
 @router.get("/{project_id}/environment", response_model=List[EnvironmentItemResponse])
 def get_project_environment(
     project_id: str,
+    reveal: bool = False,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -711,23 +919,33 @@ def get_project_environment(
     if not p:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    items = db.query(EnvironmentVariable).filter(EnvironmentVariable.project_id == project_id).all()
+    can_reveal = bool(reveal and getattr(current_user, "role", "") in ("owner", "admin"))
+    items = (
+        db.query(EnvironmentVariable)
+        .filter(EnvironmentVariable.project_id == project_id)
+        .order_by(EnvironmentVariable.key.asc())
+        .all()
+    )
     results = []
     for item in items:
-        # Decrypt to mask securely
+        plain_val: Optional[str] = None
         try:
-            val = decrypt_secret(item.encrypted_value)
-            masked = mask_secret(val)
+            decrypted = decrypt_secret(item.encrypted_value)
+            masked = mask_secret(decrypted)
+            if can_reveal:
+                plain_val = decrypted
         except Exception:
             masked = "********"
         results.append(
             EnvironmentItemResponse(
                 key=item.key,
                 masked_value=masked,
-                updated_at=item.updated_at
+                value=plain_val,
+                updated_at=item.updated_at,
             )
         )
     return results
+
 
 @router.put("/{project_id}/environment")
 def update_project_environment(
@@ -740,17 +958,29 @@ def update_project_environment(
     if not p:
         raise HTTPException(status_code=404, detail="Project not found")
 
+    deduped: Dict[str, str] = {}
+    for item in payload.variables:
+        clean_key = (item.key or "").strip()
+        if not clean_key:
+            continue
+        if not _ENV_KEY_RE.match(clean_key):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Nama key environment tidak valid: '{clean_key}'",
+            )
+        deduped[clean_key] = item.value if item.value is not None else ""
+
     # Replace variables with encrypted values
     db.query(EnvironmentVariable).filter(EnvironmentVariable.project_id == project_id).delete()
 
-    for item in payload.variables:
-        encrypted = encrypt_secret(item.value)
-        db_var = EnvironmentVariable(
-            project_id=project_id,
-            key=item.key.strip(),
-            encrypted_value=encrypted
+    for clean_key, val in deduped.items():
+        db.add(
+            EnvironmentVariable(
+                project_id=project_id,
+                key=clean_key,
+                encrypted_value=encrypt_secret(val),
+            )
         )
-        db.add(db_var)
 
     db.commit()
 
@@ -760,9 +990,130 @@ def update_project_environment(
         resource_type="project",
         resource_id=project_id,
         user_id=current_user.id,
-        details={"keys_updated": [i.key for i in payload.variables]}
+        details={"keys_updated": list(deduped.keys())}
     )
-    return {"message": "Environment variables encrypted and updated"}
+    return {"message": "Environment variables encrypted and updated", "count": len(deduped)}
+
+
+@router.post("/{project_id}/environment/item", response_model=EnvironmentItemResponse)
+def upsert_project_environment_item(
+    project_id: str,
+    payload: EnvironmentVariableUpsertRequest,
+    current_user: User = Depends(require_role("owner", "admin")),
+    db: Session = Depends(get_db),
+):
+    p = db.query(Project).filter(Project.id == project_id).first()
+    if not p:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    clean_key = (payload.key or "").strip()
+    if not clean_key or not _ENV_KEY_RE.match(clean_key):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Nama key environment tidak valid: '{clean_key or '(kosong)'}'",
+        )
+
+    val_str = payload.value if payload.value is not None else ""
+    enc = encrypt_secret(val_str)
+    now = datetime.now(timezone.utc)
+    orig_key = (payload.original_key or "").strip()
+
+    if orig_key and orig_key != clean_key:
+        orig_row = (
+            db.query(EnvironmentVariable)
+            .filter(EnvironmentVariable.project_id == project_id, EnvironmentVariable.key == orig_key)
+            .first()
+        )
+        target_row = (
+            db.query(EnvironmentVariable)
+            .filter(EnvironmentVariable.project_id == project_id, EnvironmentVariable.key == clean_key)
+            .first()
+        )
+        if target_row:
+            target_row.encrypted_value = enc
+            target_row.updated_at = now
+            if orig_row and orig_row.id != target_row.id:
+                db.delete(orig_row)
+            row = target_row
+        elif orig_row:
+            orig_row.key = clean_key
+            orig_row.encrypted_value = enc
+            orig_row.updated_at = now
+            row = orig_row
+        else:
+            row = EnvironmentVariable(
+                project_id=project_id, key=clean_key, encrypted_value=enc, updated_at=now
+            )
+            db.add(row)
+    else:
+        row = (
+            db.query(EnvironmentVariable)
+            .filter(EnvironmentVariable.project_id == project_id, EnvironmentVariable.key == clean_key)
+            .first()
+        )
+        if row:
+            row.encrypted_value = enc
+            row.updated_at = now
+        else:
+            row = EnvironmentVariable(
+                project_id=project_id, key=clean_key, encrypted_value=enc, updated_at=now
+            )
+            db.add(row)
+
+    db.commit()
+    db.refresh(row)
+
+    log_activity(
+        db,
+        action="project.environment_upsert",
+        resource_type="project",
+        resource_id=project_id,
+        user_id=current_user.id,
+        details={
+            "key": clean_key,
+            "renamed_from": orig_key if (orig_key and orig_key != clean_key) else None,
+        },
+    )
+
+    return EnvironmentItemResponse(
+        key=row.key,
+        masked_value=mask_secret(val_str),
+        value=val_str,
+        updated_at=row.updated_at,
+    )
+
+
+@router.delete("/{project_id}/environment/{env_key}")
+def delete_project_environment_item(
+    project_id: str,
+    env_key: str,
+    current_user: User = Depends(require_role("owner", "admin")),
+    db: Session = Depends(get_db),
+):
+    p = db.query(Project).filter(Project.id == project_id).first()
+    if not p:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    row = (
+        db.query(EnvironmentVariable)
+        .filter(EnvironmentVariable.project_id == project_id, EnvironmentVariable.key == env_key)
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail=f"Environment variable '{env_key}' not found")
+
+    db.delete(row)
+    db.commit()
+
+    log_activity(
+        db,
+        action="project.environment_delete",
+        resource_type="project",
+        resource_id=project_id,
+        user_id=current_user.id,
+        details={"key": env_key},
+    )
+    return {"message": f"Environment variable '{env_key}' deleted", "key": env_key}
 
 @router.get("/{project_id}/deployments", response_model=List[DeploymentResponse])
 def get_project_deployments(
@@ -776,12 +1127,136 @@ def get_project_deployments(
     return deployments
 
 
-@router.get("/databases/list")
-def get_all_postgres_databases(
-    current_user: User = Depends(get_current_user),
-):
-    """List all databases present on the PostgreSQL server."""
-    return {"databases": list_all_postgres_databases()}
+def _compute_deployment_connection(
+    target_engine: str,
+    clean_db: Optional[str],
+    db_info: Dict[str, Any],
+    runtime: Dict[str, Any],
+    stored_env: Dict[str, str],
+) -> Dict[str, Any]:
+    container_db_env = runtime.get("container_db_env") or {}
+    has_container_db_keys = any(
+        k in container_db_env
+        for k in (
+            "DB_CONNECTION", "DB_DATABASE", "DB_NAME", "MYSQL_DATABASE",
+            "POSTGRES_DB", "SQLITE_DATABASE", "DB_HOST", "MYSQL_HOST", "POSTGRES_HOST",
+        )
+    )
+    if runtime.get("container_exists") and has_container_db_keys:
+        eff_env = container_db_env
+        env_source = "container"
+    elif stored_env:
+        eff_env = stored_env
+        env_source = "project_env"
+    else:
+        eff_env = {}
+        env_source = "none"
+
+    env_db_connection = (
+        eff_env.get("DB_CONNECTION")
+        or ("mysql" if eff_env.get("MYSQL_DATABASE") else ("pgsql" if eff_env.get("POSTGRES_DB") else None))
+    )
+    env_db_host = eff_env.get("DB_HOST") or eff_env.get("MYSQL_HOST") or eff_env.get("POSTGRES_HOST")
+    env_db_port = eff_env.get("DB_PORT") or eff_env.get("MYSQL_PORT") or eff_env.get("POSTGRES_PORT")
+    env_db_name = (
+        eff_env.get("DB_DATABASE")
+        or eff_env.get("DB_NAME")
+        or eff_env.get("MYSQL_DATABASE")
+        or eff_env.get("POSTGRES_DB")
+        or eff_env.get("SQLITE_DATABASE")
+    )
+
+    if target_engine == "none":
+        env_matches_database = True
+    else:
+        conn_l = (env_db_connection or "").lower().strip()
+        engine_ok = (
+            (not conn_l)
+            or (target_engine == "postgres" and conn_l in ("pgsql", "postgres", "postgresql"))
+            or (target_engine == "mysql" and conn_l in ("mysql", "mariadb"))
+            or (target_engine == "sqlite" and conn_l == "sqlite")
+        )
+        target_name = (clean_db or "").strip().lower()
+        env_name = (env_db_name or "").strip().lower()
+        name_ok = bool(target_name and env_name and (
+            env_name == target_name
+            or (target_engine == "sqlite" and (env_name.endswith(f"/{target_name}.db") or target_name in env_name))
+        ))
+        env_matches_database = bool(engine_ok and name_ok)
+
+    db_connected = bool(db_info.get("connected", False))
+    container_exists = bool(runtime.get("container_exists", False))
+    container_running = bool(runtime.get("container_running", False))
+    container_name = runtime.get("container_name") or ""
+    active_sessions = int(db_info.get("active_connections", 0) or 0)
+
+    if target_engine == "none":
+        conn_status = "stateless"
+        is_connected = False
+        summary = "Project berjalan dalam mode stateless tanpa koneksi database."
+    elif container_running:
+        if not db_connected:
+            conn_status = "degraded"
+            is_connected = False
+            summary = (
+                f"Container '{container_name}' aktif (RUNNING), tetapi server {target_engine.upper()} "
+                f"belum dapat diverifikasi ({db_info.get('error') or 'cek koneksi database'})."
+            )
+        elif not env_matches_database:
+            conn_status = "mismatch"
+            is_connected = False
+            summary = (
+                f"Container '{container_name}' berjalan, tetapi env DB ({env_db_connection or '?'} / "
+                f"{env_db_name or '?'}) tidak cocok dengan database '{clean_db}' ({target_engine})."
+            )
+        else:
+            conn_status = "connected"
+            is_connected = True
+            summary = (
+                f"Terhubung aktif! Container '{container_name}' berjalan dan mengarah ke database "
+                f"'{clean_db}' ({target_engine.upper()}) dengan {active_sessions} sesi aktif."
+            )
+    elif container_exists:
+        conn_status = "disconnected"
+        is_connected = False
+        summary = (
+            f"Container '{container_name}' berhenti (state: {runtime.get('container_state')}). "
+            f"Database '{clean_db}' siap; restart atau deploy ulang container untuk menghubungkan kembali."
+        )
+    elif db_connected and env_matches_database:
+        conn_status = "configured_standby"
+        is_connected = False
+        summary = (
+            f"Database '{clean_db}' & environment sudah tersinkronisasi, menunggu project di-deploy ke container."
+        )
+    elif db_connected:
+        conn_status = "configured_standby"
+        is_connected = False
+        summary = f"Database '{clean_db}' online di server, namun project belum di-deploy ke container Docker."
+    else:
+        conn_status = "disconnected"
+        is_connected = False
+        summary = f"Project belum di-deploy dan server database belum terhubung ({db_info.get('error') or 'offline'})."
+
+    return {
+        "is_connected": is_connected,
+        "status": conn_status,
+        "summary": summary,
+        "container_exists": container_exists,
+        "container_running": container_running,
+        "container_name": container_name,
+        "container_state": runtime.get("container_state") or "not_created",
+        "container_networks": runtime.get("container_networks") or [],
+        "latest_deployment_version": runtime.get("latest_deployment_version"),
+        "latest_deployment_status": runtime.get("latest_deployment_status"),
+        "env_source": env_source,
+        "env_db_connection": env_db_connection,
+        "env_db_host": env_db_host,
+        "env_db_port": env_db_port,
+        "env_db_name": env_db_name,
+        "env_matches_database": env_matches_database,
+        "active_db_sessions": active_sessions,
+    }
 
 
 @router.get("/{project_id}/database")
@@ -790,32 +1265,35 @@ def get_project_database_info(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Inspect the database bound to this project (PostgreSQL, MySQL, or SQLite)."""
+    """Inspect the database bound to this project (PostgreSQL, MySQL, or SQLite) and its live deployment link."""
     p = db.query(Project).filter(Project.id == project_id).first()
     if not p:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    target_type = (p.db_type or "postgres").lower().strip()
-    db_name = resolve_project_db_name(p)
+    target_engine = _normalize_db_engine(p.db_type)
+    stored_env = _get_safe_project_env_map(db, p.id)
+    db_name = resolve_project_db_name(p, stored_env)
+    clean_db: Optional[str] = None
 
-    if target_type in ("mysql", "mariadb"):
+    if target_engine == "mysql":
         db_info = ensure_mysql_database(db_name)
         db_env = build_mysql_env_vars(db_info)
         masked_pass = mask_secret(db_info.get("password", ""))
-        user = db_info.get("user", "appuser")
-        host = db_info.get("host", "192.168.25.101")
+        user = db_info.get("user", "fadb")
+        host = db_info.get("host", settings.SERVER_LAN_IP)
         port = db_info.get("port", 3306)
         clean_db = db_info.get("db_name", db_name)
         conn_url_internal = f"mysql://{user}:{masked_pass}@{host}:{port}/{clean_db}"
         conn_url_external = f"mysql://{user}:{masked_pass}@{db_info.get('external_host', host)}:{port}/{clean_db}"
         raw_url = f"mysql://{user}:{db_info.get('password', '')}@{host}:{port}/{clean_db}"
-    elif target_type == "sqlite":
+    elif target_engine == "sqlite":
         db_info, db_env = build_sqlite_env_vars(db_name)
+        clean_db = db_info.get("db_name", db_name)
         masked_pass = ""
         conn_url_internal = db_env.get("DATABASE_URL", f"sqlite:////data/{db_name}.db")
         conn_url_external = conn_url_internal
         raw_url = conn_url_internal
-    elif target_type in ("none", "stateless"):
+    elif target_engine == "none":
         db_info = {
             "db_type": "none",
             "db_name": None,
@@ -828,6 +1306,7 @@ def get_project_database_info(
             "tables": [],
             "tables_count": 0,
             "size_bytes": 0,
+            "active_connections": 0,
         }
         db_env = {}
         masked_pass = ""
@@ -838,13 +1317,36 @@ def get_project_database_info(
         db_info = ensure_postgres_database(db_name)
         db_env = build_postgres_env_vars(db_info)
         masked_pass = mask_secret(db_info.get("password", ""))
-        user = db_info.get("user", "appuser")
-        host = db_info.get("host", "192.168.25.101")
+        user = db_info.get("user", "fadb")
+        host = db_info.get("host", settings.SERVER_LAN_IP)
         port = db_info.get("port", 5432)
         clean_db = db_info.get("db_name", db_name)
         conn_url_internal = f"postgresql://{user}:{masked_pass}@{host}:{port}/{clean_db}"
         conn_url_external = f"postgresql://{user}:{masked_pass}@{db_info.get('external_host', host)}:{port}/{clean_db}"
         raw_url = f"postgresql://{user}:{db_info.get('password', '')}@{host}:{port}/{clean_db}"
+
+    runtime = _inspect_project_runtime(p, db)
+    deployment_connection = _compute_deployment_connection(
+        target_engine=target_engine,
+        clean_db=clean_db,
+        db_info=db_info,
+        runtime=runtime,
+        stored_env=stored_env,
+    )
+
+    connected_projects: List[Dict[str, Any]] = []
+    if target_engine != "none" and clean_db:
+        all_projects = db.query(Project).order_by(Project.created_at.desc()).all()
+        for other in all_projects:
+            if _normalize_db_engine(other.db_type) != target_engine:
+                continue
+            other_env = stored_env if other.id == p.id else _get_safe_project_env_map(db, other.id)
+            other_db = resolve_project_db_name(other, other_env)
+            if other_db.lower() == clean_db.lower():
+                other_runtime = runtime if other.id == p.id else _inspect_project_runtime(other, db)
+                connected_projects.append(
+                    _build_connected_project_entry(other, other_runtime, current_project_id=p.id)
+                )
 
     return {
         **db_info,
@@ -857,6 +1359,8 @@ def get_project_database_info(
             for k, v in db_env.items()
         },
         "env_full": db_env,
+        "deployment_connection": deployment_connection,
+        "connected_projects": connected_projects,
     }
 
 

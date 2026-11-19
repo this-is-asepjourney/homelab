@@ -26,6 +26,18 @@ def sanitize_db_name(raw_name: str) -> str:
 # 1. POSTGRESQL ENGINE
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _dedupe_list(items: List[Any]) -> List[Any]:
+    seen = []
+    for item in items:
+        if item and item not in seen:
+            seen.append(item)
+    return seen
+
+
+def _get_external_host() -> str:
+    return os.getenv("HOST_IP") or settings.SERVER_LAN_IP or "192.168.25.105"
+
+
 def parse_database_url_Config() -> Dict[str, Any]:
     """Extract PostgreSQL connection parameters from environment and settings.DATABASE_URL."""
     db_url = settings.DATABASE_URL or ""
@@ -47,9 +59,15 @@ def parse_database_url_Config() -> Dict[str, Any]:
         except Exception:
             pass
 
-    user = os.getenv("POSTGRES_USER") or parsed_user or settings.POSTGRES_USER or "appuser"
-    password = os.getenv("POSTGRES_PASSWORD") or parsed_pass or settings.POSTGRES_PASSWORD or "admin12345"
-    configured_host = os.getenv("POSTGRES_HOST") or parsed_host or settings.POSTGRES_HOST or "192.168.25.101"
+    user = os.getenv("POSTGRES_USER") or parsed_user or settings.POSTGRES_USER or "fadb"
+    password = os.getenv("POSTGRES_PASSWORD") or parsed_pass or settings.POSTGRES_PASSWORD or "wokeh123"
+    configured_host = (
+        os.getenv("POSTGRES_HOST")
+        or parsed_host
+        or settings.POSTGRES_HOST
+        or settings.SERVER_LAN_IP
+        or "postgres"
+    )
     port = int(os.getenv("POSTGRES_PORT") or parsed_port or 5432)
     default_db = os.getenv("POSTGRES_DB") or parsed_db or "psm"
 
@@ -77,27 +95,32 @@ def _try_pg_connect(host: str, port: int, user: str, password: str, dbname: str,
 def find_working_postgres_connection() -> Optional[Dict[str, Any]]:
     """Probe candidate PostgreSQL hosts and credentials to find the active server."""
     cfg = parse_database_url_Config()
-    candidate_hosts = []
-    for h in [cfg["configured_host"], "192.168.25.101", "host.docker.internal", "postgres", "psm-postgres", "127.0.0.1"]:
-        if h and h not in candidate_hosts:
-            candidate_hosts.append(h)
+    candidate_hosts = _dedupe_list([
+        cfg["configured_host"],
+        "postgres",
+        "psm-postgres",
+        settings.SERVER_LAN_IP,
+        "host.docker.internal",
+        "127.0.0.1",
+        "192.168.25.101",
+    ])
 
-    candidate_creds: List[Tuple[str, str]] = [
+    unique_creds: List[Tuple[str, str]] = _dedupe_list([
         (cfg["user"], cfg["password"]),
-        ("appuser", "admin12345"),
+        ("fadb", "wokeh123"),
         ("postgres", cfg["password"]),
+        ("appuser", "admin12345"),
         ("postgres", "admin12345"),
         ("psm", "psm_super_secret_password_change_in_production"),
-    ]
-    unique_creds: List[Tuple[str, str]] = []
-    for c in candidate_creds:
-        if c not in unique_creds:
-            unique_creds.append(c)
+    ])
 
-    candidate_dbs = []
-    for d in [cfg["default_db"], "postgres", "template1", "psm"]:
-        if d and d not in candidate_dbs:
-            candidate_dbs.append(d)
+    candidate_dbs = _dedupe_list([
+        cfg["default_db"],
+        "postgres",
+        "psm",
+        "fadb",
+        "template1",
+    ])
 
     for host in candidate_hosts:
         try:
@@ -124,23 +147,25 @@ def find_working_postgres_connection() -> Optional[Dict[str, Any]]:
 
 
 def ensure_postgres_database(db_name: str) -> Dict[str, Any]:
-    """Ensure a PostgreSQL database exists, creating it if missing, and inspect tables/size."""
+    """Ensure a PostgreSQL database exists, creating it if missing, and inspect tables/size/sessions."""
     clean_name = sanitize_db_name(db_name)
     pg_conn_info = find_working_postgres_connection()
+    external_host = _get_external_host()
     if not pg_conn_info:
         return {
             "db_type": "postgres",
             "db_name": clean_name,
-            "host": os.getenv("POSTGRES_HOST", "192.168.25.101"),
-            "external_host": os.getenv("HOST_IP", "192.168.25.101"),
-            "port": 5432,
-            "user": os.getenv("POSTGRES_USER", "appuser"),
-            "password": os.getenv("POSTGRES_PASSWORD", "admin12345"),
+            "host": os.getenv("POSTGRES_HOST") or settings.POSTGRES_HOST or "postgres",
+            "external_host": external_host,
+            "port": int(os.getenv("POSTGRES_PORT") or settings.POSTGRES_PORT or 5432),
+            "user": os.getenv("POSTGRES_USER") or settings.POSTGRES_USER or "fadb",
+            "password": os.getenv("POSTGRES_PASSWORD") or settings.POSTGRES_PASSWORD or "wokeh123",
             "created": False,
             "connected": False,
             "tables": [],
             "tables_count": 0,
             "size_bytes": 0,
+            "active_connections": 0,
             "error": "PostgreSQL host unreachable",
         }
 
@@ -160,6 +185,19 @@ def ensure_postgres_database(db_name: str) -> Dict[str, Any]:
         if not exists:
             cur.execute(f'CREATE DATABASE "{clean_name}" ENCODING \'UTF8\'')
             created = True
+
+        active_connections = 0
+        try:
+            cur.execute(
+                "SELECT COUNT(*) FROM pg_stat_activity WHERE datname = %s AND pid <> pg_backend_pid()",
+                (clean_name,),
+            )
+            row = cur.fetchone()
+            if row and row[0] is not None:
+                active_connections = int(row[0])
+        except Exception:
+            active_connections = 0
+
         cur.close()
         conn.close()
 
@@ -182,7 +220,6 @@ def ensure_postgres_database(db_name: str) -> Dict[str, Any]:
         except Exception:
             pass
 
-        external_host = os.getenv("HOST_IP", "192.168.25.101")
         return {
             "db_type": "postgres",
             "db_name": clean_name,
@@ -196,13 +233,14 @@ def ensure_postgres_database(db_name: str) -> Dict[str, Any]:
             "tables": tables,
             "tables_count": len(tables),
             "size_bytes": size_bytes,
+            "active_connections": active_connections,
         }
     except Exception as e:
         return {
             "db_type": "postgres",
             "db_name": clean_name,
             "host": host,
-            "external_host": os.getenv("HOST_IP", "192.168.25.101"),
+            "external_host": external_host,
             "port": port,
             "user": user,
             "password": password,
@@ -211,16 +249,17 @@ def ensure_postgres_database(db_name: str) -> Dict[str, Any]:
             "tables": [],
             "tables_count": 0,
             "size_bytes": 0,
+            "active_connections": 0,
             "error": str(e),
         }
 
 
 def build_postgres_env_vars(db_info: Dict[str, Any]) -> Dict[str, str]:
-    host = db_info.get("host") or "192.168.25.101"
+    host = db_info.get("host") or settings.POSTGRES_HOST or "postgres"
     port = str(db_info.get("port") or 5432)
     db_name = db_info.get("db_name") or "psm_app_db"
-    user = db_info.get("user") or "appuser"
-    password = db_info.get("password") or "admin12345"
+    user = db_info.get("user") or settings.POSTGRES_USER or "fadb"
+    password = db_info.get("password") or settings.POSTGRES_PASSWORD or "wokeh123"
     conn_url = f"postgresql://{user}:{password}@{host}:{port}/{db_name}"
     sqlalchemy_url = f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{db_name}"
 
@@ -249,60 +288,74 @@ def build_postgres_env_vars(db_info: Dict[str, Any]) -> Dict[str, str]:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def find_working_mysql_connection() -> Optional[Dict[str, Any]]:
-    """Probe MySQL host and credentials with root & appuser candidates."""
-    import pymysql
+    """Probe MySQL host and credentials with root & fadb candidates."""
+    try:
+        import pymysql
+    except ImportError:
+        return None
 
-    host = os.getenv("MYSQL_HOST") or os.getenv("STOCK_DB_HOST", "192.168.25.101")
-    port = int(os.getenv("MYSQL_PORT") or os.getenv("STOCK_DB_PORT", 3306))
-    candidates = [
-        (host, port),
-        ("192.168.25.101", 3306),
-        ("host.docker.internal", 3306),
-        ("127.0.0.1", 3306),
-    ]
-    creds = [
-        ("root", os.getenv("MYSQL_ROOT_PASSWORD", "adminroot12345")),
-        (os.getenv("MYSQL_USER", "appuser"), os.getenv("MYSQL_PASSWORD", "admin12345")),
+    configured_host = os.getenv("MYSQL_HOST") or os.getenv("STOCK_DB_HOST") or "mysql"
+    port = int(os.getenv("MYSQL_PORT") or os.getenv("STOCK_DB_PORT") or 3306)
+    candidate_hosts = _dedupe_list([
+        configured_host,
+        "mysql",
+        "homelab-mysql",
+        settings.SERVER_LAN_IP,
+        "host.docker.internal",
+        "127.0.0.1",
+        "192.168.25.101",
+    ])
+    raw_creds: List[Tuple[str, str]] = []
+    env_root_pw = os.getenv("MYSQL_ROOT_PASSWORD", "")
+    if env_root_pw:
+        raw_creds.append(("root", env_root_pw))
+    raw_creds.extend([
+        (os.getenv("MYSQL_USER", "fadb"), os.getenv("MYSQL_PASSWORD", "wokeh123")),
+        ("root", "wokeh123"),
+        ("fadb", "wokeh123"),
+        ("root", "ganti_root_password_mysql"),
         ("root", "adminroot12345"),
+        ("appuser", "admin12345"),
         ("root", "admin12345"),
         ("root", "root"),
-        ("appuser", "admin12345"),
-    ]
+    ])
+    creds = _dedupe_list(raw_creds)
 
-    for h, p in candidates:
+    for h in candidate_hosts:
         try:
-            with socket.create_connection((h, p), timeout=0.6):
+            with socket.create_connection((h, port), timeout=0.6):
                 pass
         except Exception:
             continue
 
         for u, pw in creds:
             try:
-                conn = pymysql.connect(host=h, port=p, user=u, password=pw, connect_timeout=2)
+                conn = pymysql.connect(host=h, port=port, user=u, password=pw, connect_timeout=2)
                 conn.close()
-                return {"host": h, "port": p, "user": u, "password": pw}
+                return {"host": h, "port": port, "user": u, "password": pw}
             except Exception:
                 continue
     return None
 
 
 def ensure_mysql_database(db_name: str, target_user: Optional[str] = None) -> Dict[str, Any]:
-    """Ensure a project-specific MySQL database exists, creating it if missing and granting privileges to project user, and inspect tables/size."""
-    import pymysql
-
+    """Ensure a project-specific MySQL database exists, creating it if missing and granting privileges to project user, and inspect tables/size/sessions."""
     clean_name = sanitize_db_name(db_name)
-    conn_info = find_working_mysql_connection()
-    app_user = target_user or os.getenv("MYSQL_USER", "appuser")
-    app_pass = os.getenv("MYSQL_PASSWORD", "admin12345")
-    external_host = os.getenv("HOST_IP", "192.168.25.101")
+    app_user = target_user or os.getenv("MYSQL_USER", "fadb")
+    app_pass = os.getenv("MYSQL_PASSWORD", "wokeh123")
+    external_host = _get_external_host()
+    fallback_host = os.getenv("MYSQL_HOST") or os.getenv("STOCK_DB_HOST") or "mysql"
+    fallback_port = int(os.getenv("MYSQL_PORT") or os.getenv("STOCK_DB_PORT") or 3306)
 
-    if not conn_info:
+    try:
+        import pymysql
+    except ImportError:
         return {
             "db_type": "mysql",
             "db_name": clean_name,
-            "host": os.getenv("MYSQL_HOST") or os.getenv("STOCK_DB_HOST", "192.168.25.101"),
+            "host": fallback_host,
             "external_host": external_host,
-            "port": 3306,
+            "port": fallback_port,
             "user": app_user,
             "password": app_pass,
             "created": False,
@@ -310,6 +363,26 @@ def ensure_mysql_database(db_name: str, target_user: Optional[str] = None) -> Di
             "tables": [],
             "tables_count": 0,
             "size_bytes": 0,
+            "active_connections": 0,
+            "error": "Driver pymysql belum terpasang di psm-api",
+        }
+
+    conn_info = find_working_mysql_connection()
+    if not conn_info:
+        return {
+            "db_type": "mysql",
+            "db_name": clean_name,
+            "host": fallback_host,
+            "external_host": external_host,
+            "port": fallback_port,
+            "user": app_user,
+            "password": app_pass,
+            "created": False,
+            "connected": False,
+            "tables": [],
+            "tables_count": 0,
+            "size_bytes": 0,
+            "active_connections": 0,
             "error": "MySQL host unreachable",
         }
 
@@ -328,13 +401,14 @@ def ensure_mysql_database(db_name: str, target_user: Optional[str] = None) -> Di
             cur.execute(f"CREATE DATABASE IF NOT EXISTS `{clean_name}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;")
             created = True
 
-        # Ensure dedicated project user (appuser) has full rights on this database
-        try:
-            cur.execute(f"CREATE USER IF NOT EXISTS '{app_user}'@'%' IDENTIFIED BY '{app_pass}';")
-            cur.execute(f"GRANT ALL PRIVILEGES ON `{clean_name}`.* TO '{app_user}'@'%';")
-            cur.execute("FLUSH PRIVILEGES;")
-        except Exception:
-            pass
+        # Ensure dedicated project user has full rights when connected as privileged user
+        if user != app_user:
+            try:
+                cur.execute(f"CREATE USER IF NOT EXISTS '{app_user}'@'%' IDENTIFIED BY '{app_pass}';")
+                cur.execute(f"GRANT ALL PRIVILEGES ON `{clean_name}`.* TO '{app_user}'@'%';")
+                cur.execute("FLUSH PRIVILEGES;")
+            except Exception:
+                pass
 
         # Inspect tables and storage size in this database
         tables: List[str] = []
@@ -355,6 +429,18 @@ def ensure_mysql_database(db_name: str, target_user: Optional[str] = None) -> Di
         except Exception:
             pass
 
+        active_connections = 0
+        try:
+            cur.execute(
+                "SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE DB = %s AND ID <> CONNECTION_ID()",
+                (clean_name,),
+            )
+            proc_row = cur.fetchone()
+            if proc_row and proc_row[0] is not None:
+                active_connections = int(proc_row[0])
+        except Exception:
+            active_connections = 0
+
         conn.commit()
         cur.close()
         conn.close()
@@ -372,6 +458,7 @@ def ensure_mysql_database(db_name: str, target_user: Optional[str] = None) -> Di
             "tables": tables,
             "tables_count": len(tables),
             "size_bytes": size_bytes,
+            "active_connections": active_connections,
         }
     except Exception as e:
         return {
@@ -387,16 +474,17 @@ def ensure_mysql_database(db_name: str, target_user: Optional[str] = None) -> Di
             "tables": [],
             "tables_count": 0,
             "size_bytes": 0,
+            "active_connections": 0,
             "error": str(e),
         }
 
 
 def build_mysql_env_vars(db_info: Dict[str, Any]) -> Dict[str, str]:
-    host = db_info.get("host") or "192.168.25.101"
+    host = db_info.get("host") or os.getenv("MYSQL_HOST") or "mysql"
     port = str(db_info.get("port") or 3306)
     db_name = db_info.get("db_name") or "appdb"
-    user = db_info.get("user") or os.getenv("MYSQL_USER", "appuser")
-    password = db_info.get("password") or os.getenv("MYSQL_PASSWORD", "admin12345")
+    user = db_info.get("user") or os.getenv("MYSQL_USER", "fadb")
+    password = db_info.get("password") or os.getenv("MYSQL_PASSWORD", "wokeh123")
     conn_url = f"mysql+pymysql://{user}:{password}@{host}:{port}/{db_name}"
     standard_url = f"mysql://{user}:{password}@{host}:{port}/{db_name}"
 
@@ -458,6 +546,7 @@ def build_sqlite_env_vars(db_name: str) -> Tuple[Dict[str, Any], Dict[str, str]]
         "tables": tables,
         "tables_count": len(tables),
         "size_bytes": size_bytes,
+        "active_connections": 0,
     }
     env_vars = {
         "DATABASE_URL": conn_url,
@@ -528,21 +617,18 @@ def provision_and_sync_project_db(
         generated_env = build_postgres_env_vars(db_info)
 
     # Merge and enforce active database engine isolation
-    if target_type == "postgres":
-        # Clean conflicting MySQL variables
-        for my_k in ["MYSQL_URL", "MYSQL_DATABASE", "MYSQL_USER", "MYSQL_PASSWORD", "MYSQL_HOST", "MYSQL_PORT"]:
-            existing_env.pop(my_k, None)
-        for k, v in generated_env.items():
-            existing_env[k] = v
-    elif target_type in ("mysql", "mariadb"):
-        # Clean conflicting PostgreSQL variables
-        for pg_k in ["POSTGRES_URL", "POSTGRES_HOST", "POSTGRES_PORT", "POSTGRES_DB", "POSTGRES_USER", "POSTGRES_PASSWORD"]:
-            existing_env.pop(pg_k, None)
+    if override_existing_env:
+        if target_type == "postgres":
+            for my_k in ["MYSQL_URL", "MYSQL_DATABASE", "MYSQL_USER", "MYSQL_PASSWORD", "MYSQL_HOST", "MYSQL_PORT"]:
+                existing_env.pop(my_k, None)
+        elif target_type in ("mysql", "mariadb"):
+            for pg_k in ["POSTGRES_URL", "POSTGRES_HOST", "POSTGRES_PORT", "POSTGRES_DB", "POSTGRES_USER", "POSTGRES_PASSWORD"]:
+                existing_env.pop(pg_k, None)
         for k, v in generated_env.items():
             existing_env[k] = v
     else:
         for k, v in generated_env.items():
-            if override_existing_env or (k not in existing_env) or not existing_env.get(k):
+            if (k not in existing_env) or not existing_env.get(k):
                 existing_env[k] = v
 
     # Persist in database
@@ -590,14 +676,26 @@ def list_all_postgres_databases() -> List[Dict[str, Any]]:
             timeout=4,
         )
         cur = conn.cursor()
-        cur.execute(
-            "SELECT datname, pg_database_size(datname) "
-            "FROM pg_database WHERE datistemplate = false ORDER BY datname ASC"
-        )
-        for name, sz in cur.fetchall():
+        try:
+            cur.execute(
+                "SELECT d.datname, pg_database_size(d.datname), "
+                "(SELECT COUNT(*) FROM pg_stat_activity a WHERE a.datname = d.datname AND a.pid <> pg_backend_pid()) "
+                "FROM pg_database d WHERE d.datistemplate = false ORDER BY d.datname ASC"
+            )
+            rows = [(name, sz, active) for name, sz, active in cur.fetchall()]
+        except Exception:
+            cur.execute(
+                "SELECT datname, pg_database_size(datname) "
+                "FROM pg_database WHERE datistemplate = false ORDER BY datname ASC"
+            )
+            rows = [(name, sz, 0) for name, sz in cur.fetchall()]
+
+        for name, sz, active in rows:
             results.append({
                 "db_name": name,
                 "size_bytes": int(sz or 0),
+                "tables_count": 0,
+                "active_connections": int(active or 0),
                 "host": pg_conn_info["host"],
                 "port": pg_conn_info["port"],
                 "type": "postgres",
@@ -610,8 +708,11 @@ def list_all_postgres_databases() -> List[Dict[str, Any]]:
 
 
 def list_all_mysql_databases() -> List[Dict[str, Any]]:
-    """Return a list of all databases on MySQL server."""
-    import pymysql
+    """Return a list of all databases on MySQL server with table counts, sizes, and active sessions."""
+    try:
+        import pymysql
+    except ImportError:
+        return []
 
     conn_info = find_working_mysql_connection()
     if not conn_info:
@@ -627,11 +728,38 @@ def list_all_mysql_databases() -> List[Dict[str, Any]]:
             connect_timeout=3,
         )
         cur = conn.cursor()
+
+        table_stats: Dict[str, Tuple[int, int]] = {}
+        try:
+            cur.execute(
+                "SELECT TABLE_SCHEMA, COUNT(*), COALESCE(SUM(DATA_LENGTH + INDEX_LENGTH), 0) "
+                "FROM information_schema.TABLES WHERE TABLE_TYPE = 'BASE TABLE' GROUP BY TABLE_SCHEMA"
+            )
+            for schema_name, tbl_cnt, sz in cur.fetchall():
+                table_stats[str(schema_name)] = (int(tbl_cnt or 0), int(sz or 0))
+        except Exception:
+            pass
+
+        conn_stats: Dict[str, int] = {}
+        try:
+            cur.execute(
+                "SELECT DB, COUNT(*) FROM information_schema.PROCESSLIST "
+                "WHERE DB IS NOT NULL AND ID <> CONNECTION_ID() GROUP BY DB"
+            )
+            for db_n, cnt in cur.fetchall():
+                conn_stats[str(db_n)] = int(cnt or 0)
+        except Exception:
+            pass
+
         cur.execute("SHOW DATABASES;")
         for (name,) in cur.fetchall():
             if name not in ("information_schema", "performance_schema", "mysql", "sys"):
+                tbl_cnt, sz = table_stats.get(name, (0, 0))
                 results.append({
                     "db_name": name,
+                    "size_bytes": sz,
+                    "tables_count": tbl_cnt,
+                    "active_connections": conn_stats.get(name, 0),
                     "host": conn_info["host"],
                     "port": conn_info["port"],
                     "type": "mysql",

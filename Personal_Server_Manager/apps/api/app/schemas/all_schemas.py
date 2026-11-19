@@ -190,12 +190,18 @@ class EnvironmentVariableItem(BaseModel):
     key: str
     value: str
 
+class EnvironmentVariableUpsertRequest(BaseModel):
+    key: str
+    value: str = ""
+    original_key: Optional[str] = None
+
 class EnvironmentUpdateRequest(BaseModel):
     variables: List[EnvironmentVariableItem]
 
 class EnvironmentItemResponse(BaseModel):
     key: str
     masked_value: str
+    value: Optional[str] = None
     updated_at: datetime
 
 # --- Project Schemas ---

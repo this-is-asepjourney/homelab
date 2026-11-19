@@ -28,6 +28,17 @@ import {
   FileCode,
   Download,
   Eye,
+  EyeOff,
+  Pencil,
+  Trash2,
+  X,
+  Search,
+  FileText,
+  List,
+  Link2,
+  Unlink,
+  Activity,
+  Server,
   Sparkles,
   Save,
   AlertCircle,
@@ -80,9 +91,22 @@ export default function ProjectDetailPage() {
   const [copiedDockerfile, setCopiedDockerfile] = useState(false);
   const [saveSuccessMsg, setSaveSuccessMsg] = useState('');
 
-  // New env var form
+  // New & editable env var state
   const [newKey, setNewKey] = useState('');
   const [newValue, setNewValue] = useState('');
+  const [showNewEnvValue, setShowNewEnvValue] = useState(false);
+  const [envSearch, setEnvSearch] = useState('');
+  const [envEditorMode, setEnvEditorMode] = useState<'list' | 'bulk'>('list');
+  const [revealAllEnv, setRevealAllEnv] = useState(false);
+  const [revealedEnvKeys, setRevealedEnvKeys] = useState<Record<string, boolean>>({});
+  const [copiedEnvKey, setCopiedEnvKey] = useState<string | null>(null);
+  const [editingEnvOriginalKey, setEditingEnvOriginalKey] = useState<string | null>(null);
+  const [editingEnvKey, setEditingEnvKey] = useState('');
+  const [editingEnvValue, setEditingEnvValue] = useState('');
+  const [showEditEnvValue, setShowEditEnvValue] = useState(false);
+  const [savingEnv, setSavingEnv] = useState(false);
+  const [envNotice, setEnvNotice] = useState<{ type: 'success' | 'error'; text: string; needsRedeploy?: boolean } | null>(null);
+  const [bulkEnvText, setBulkEnvText] = useState('');
 
   // Project settings & server deploy state
   const [projectName, setProjectName] = useState('');
@@ -133,7 +157,7 @@ export default function ProjectDetailPage() {
       const [p, d, env, dbData, s, cInfo, cLogs] = await Promise.all([
         api.getProject(projectId),
         api.getDeployments().then((list) => list.filter((item: any) => item.project_id === projectId)),
-        api.getProjectEnvironment(projectId),
+        api.getProjectEnvironment(projectId, true),
         api.getProjectDatabase(projectId),
         api.getServers().catch(() => []),
         api.getProjectContainer(projectId).catch(() => null),
@@ -149,6 +173,11 @@ export default function ProjectDetailPage() {
       setProjectDockerfilePath(p?.dockerfile_path || 'Dockerfile');
       setDeployments(d);
       setEnvVars(env);
+      setBulkEnvText(
+        Array.isArray(env)
+          ? env.map((v: any) => `${v.key}=${v.value ?? ''}`).join('\n')
+          : ''
+      );
       setDbInfo(dbData);
       setServers(s);
       setContainerInfo(cInfo);
@@ -403,17 +432,157 @@ export default function ProjectDetailPage() {
     }
   };
 
+  const toggleRevealEnvKey = (key: string) => {
+    setRevealedEnvKeys((prev) => ({ ...prev, [key]: !prev[key] }));
+  };
+
+  const isEnvValueVisible = (key: string) => revealAllEnv || Boolean(revealedEnvKeys[key]);
+
+  const handleCopyEnvValue = (key: string, val: string) => {
+    navigator.clipboard.writeText(val);
+    setCopiedEnvKey(key);
+    setTimeout(() => setCopiedEnvKey((cur) => (cur === key ? null : cur)), 1800);
+  };
+
+  const handleStartEditEnv = (item: any) => {
+    setEditingEnvOriginalKey(item.key);
+    setEditingEnvKey(item.key);
+    setEditingEnvValue(item.value ?? '');
+    setShowEditEnvValue(false);
+    setEnvNotice(null);
+  };
+
+  const handleCancelEditEnv = () => {
+    setEditingEnvOriginalKey(null);
+    setEditingEnvKey('');
+    setEditingEnvValue('');
+    setShowEditEnvValue(false);
+  };
+
+  const handleSaveEditEnv = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmedKey = editingEnvKey.trim();
+    if (!trimmedKey) return;
+    try {
+      setSavingEnv(true);
+      setEnvNotice(null);
+      await api.upsertProjectEnvVar(projectId, {
+        key: trimmedKey,
+        value: editingEnvValue,
+        original_key: editingEnvOriginalKey || undefined,
+      });
+      setEnvNotice({
+        type: 'success',
+        text: `Variable "${trimmedKey}" berhasil disimpan.`,
+        needsRedeploy: true,
+      });
+      handleCancelEditEnv();
+      await loadData();
+    } catch (err: any) {
+      setEnvNotice({ type: 'error', text: err.message || 'Gagal memperbarui variable.' });
+    } finally {
+      setSavingEnv(false);
+    }
+  };
+
+  const handleDeleteEnvVar = async (key: string) => {
+    if (!confirm(`Hapus environment variable "${key}"?`)) return;
+    try {
+      setSavingEnv(true);
+      setEnvNotice(null);
+      await api.deleteProjectEnvVar(projectId, key);
+      if (editingEnvOriginalKey === key) {
+        handleCancelEditEnv();
+      }
+      setEnvNotice({
+        type: 'success',
+        text: `Variable "${key}" telah dihapus.`,
+        needsRedeploy: true,
+      });
+      await loadData();
+    } catch (err: any) {
+      setEnvNotice({ type: 'error', text: err.message || 'Gagal menghapus variable.' });
+    } finally {
+      setSavingEnv(false);
+    }
+  };
+
   const handleAddEnvVar = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newKey) return;
+    const trimmedKey = newKey.trim();
+    if (!trimmedKey) return;
     try {
-      const updated = [...envVars.map((v) => ({ key: v.key, value: v.masked_value })), { key: newKey, value: newValue }];
-      await api.updateProjectEnvironment(projectId, updated);
+      setSavingEnv(true);
+      setEnvNotice(null);
+      await api.upsertProjectEnvVar(projectId, {
+        key: trimmedKey,
+        value: newValue,
+      });
       setNewKey('');
       setNewValue('');
-      loadData();
+      setShowNewEnvValue(false);
+      setEnvNotice({
+        type: 'success',
+        text: `Variable "${trimmedKey}" berhasil ditambahkan/diperbarui tanpa mengubah variable lainnya.`,
+        needsRedeploy: true,
+      });
+      await loadData();
     } catch (err: any) {
-      alert(err.message || 'Failed to update environment');
+      setEnvNotice({ type: 'error', text: err.message || 'Gagal menyimpan environment variable' });
+    } finally {
+      setSavingEnv(false);
+    }
+  };
+
+  const parseBulkEnvText = (text: string): Array<{ key: string; value: string }> => {
+    const parsedMap = new Map<string, string>();
+    const lines = text.split(/\r?\n/);
+    for (const rawLine of lines) {
+      const trimmed = rawLine.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const cleanLine = trimmed.startsWith('export ') ? trimmed.slice(7).trim() : trimmed;
+      const eqIdx = cleanLine.indexOf('=');
+      if (eqIdx <= 0) continue;
+      const k = cleanLine.slice(0, eqIdx).trim();
+      if (!k) continue;
+      let v = cleanLine.slice(eqIdx + 1).trim();
+      if (
+        v.length >= 2 &&
+        ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'")))
+      ) {
+        v = v.slice(1, -1);
+      }
+      parsedMap.set(k, v);
+    }
+    return Array.from(parsedMap.entries()).map(([key, value]) => ({ key, value }));
+  };
+
+  const handleSaveBulkEnv = async (andRedeploy: boolean = false) => {
+    try {
+      setSavingEnv(true);
+      setEnvNotice(null);
+      const parsedVars = parseBulkEnvText(bulkEnvText);
+      if (parsedVars.length === 0 && bulkEnvText.trim() !== '') {
+        setEnvNotice({
+          type: 'error',
+          text: 'Format .env tidak dikenali. Gunakan format KEY=VALUE per baris.',
+        });
+        return;
+      }
+      await api.updateProjectEnvironment(projectId, parsedVars);
+      setEnvNotice({
+        type: 'success',
+        text: `${parsedVars.length} environment variable berhasil disimpan dari editor .env.`,
+        needsRedeploy: !andRedeploy,
+      });
+      await loadData();
+      if (andRedeploy) {
+        await handleTriggerDeploy();
+      }
+    } catch (err: any) {
+      setEnvNotice({ type: 'error', text: err.message || 'Gagal menyimpan editor .env.' });
+    } finally {
+      setSavingEnv(false);
     }
   };
 
@@ -1263,6 +1432,162 @@ export default function ProjectDetailPage() {
               </form>
             </div>
 
+            {/* Status Koneksi Database <-> Project Ter-deploy */}
+            {(() => {
+              const depConn = dbInfo?.deployment_connection;
+              const connStatus = depConn?.status || (dbInfo?.connected ? 'configured_standby' : 'disconnected');
+              const statusMeta: Record<string, { label: string; box: string; badge: string; icon: 'linked' | 'warn' | 'unlinked' }> = {
+                connected: {
+                  label: 'TERHUBUNG KE PROJECT TER-DEPLOY',
+                  box: 'border-emerald-500/30 bg-emerald-500/5',
+                  badge: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30',
+                  icon: 'linked',
+                },
+                mismatch: {
+                  label: 'KONFIGURASI ENV TIDAK COCOK',
+                  box: 'border-amber-500/30 bg-amber-500/5',
+                  badge: 'bg-amber-500/15 text-amber-400 border-amber-500/30',
+                  icon: 'warn',
+                },
+                degraded: {
+                  label: 'CONTAINER AKTIF • DB BELUM TERVERIFIKASI',
+                  box: 'border-amber-500/30 bg-amber-500/5',
+                  badge: 'bg-amber-500/15 text-amber-400 border-amber-500/30',
+                  icon: 'warn',
+                },
+                configured_standby: {
+                  label: 'SIAP • BELUM DI-DEPLOY',
+                  box: 'border-blue-500/30 bg-blue-500/5',
+                  badge: 'bg-blue-500/15 text-blue-400 border-blue-500/30',
+                  icon: 'linked',
+                },
+                stateless: {
+                  label: 'STATELESS (TANPA DATABASE)',
+                  box: 'border-border bg-background/60',
+                  badge: 'bg-gray-500/15 text-gray-400 border-border',
+                  icon: 'unlinked',
+                },
+                disconnected: {
+                  label: 'TIDAK TERHUBUNG',
+                  box: 'border-rose-500/30 bg-rose-500/5',
+                  badge: 'bg-rose-500/15 text-rose-400 border-rose-500/30',
+                  icon: 'unlinked',
+                },
+              };
+              const meta = statusMeta[connStatus] || statusMeta.disconnected;
+
+              return (
+                <div className={`rounded-xl border p-4 space-y-4 ${meta.box}`}>
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div className="flex items-center gap-2.5 flex-wrap">
+                      {meta.icon === 'linked' ? (
+                        <Link2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                      ) : meta.icon === 'warn' ? (
+                        <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+                      ) : (
+                        <Unlink className="w-4 h-4 text-rose-400 shrink-0" />
+                      )}
+                      <h4 className="font-bold text-xs text-foreground">Status Koneksi Database &harr; Project Ter-deploy</h4>
+                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase border ${meta.badge}`}>
+                        {meta.label}
+                      </span>
+                    </div>
+                    {depConn?.latest_deployment_version != null && (
+                      <span className="text-[11px] font-mono text-gray-400">
+                        Deploy Terbaru: <strong className="text-foreground">v{depConn.latest_deployment_version}</strong> &bull; {depConn.latest_deployment_status || 'unknown'}
+                      </span>
+                    )}
+                  </div>
+
+                  <p className="text-xs text-gray-300 leading-relaxed">
+                    {depConn?.summary || `Memeriksa keterhubungan container '${project?.name}' dengan database '${dbInfo?.db_name || currentDbType}'...`}
+                  </p>
+
+                  {dbInfo?.error && (
+                    <div className="p-2.5 rounded-lg border border-rose-500/30 bg-rose-500/10 text-rose-300 text-[11px] font-mono">
+                      Diagnostik DB Server: {dbInfo.error}
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+                    {/* 1. Container Ter-deploy */}
+                    <div className="p-3 rounded-lg bg-background/80 border border-border space-y-1">
+                      <span className="text-[11px] text-gray-400 block">Container Ter-deploy</span>
+                      <div className="font-mono font-bold text-foreground truncate" title={depConn?.container_name || project?.name}>
+                        {depConn?.container_name || project?.name}
+                      </div>
+                      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border ${
+                        depConn?.container_running
+                          ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                          : depConn?.container_exists
+                          ? 'bg-rose-500/10 text-rose-400 border-rose-500/20'
+                          : 'bg-gray-500/10 text-gray-400 border-border'
+                      }`}>
+                        <span className={`w-1.5 h-1.5 rounded-full ${depConn?.container_running ? 'bg-emerald-400 animate-pulse' : 'bg-gray-400'}`} />
+                        {depConn?.container_running
+                          ? 'RUNNING'
+                          : depConn?.container_exists
+                          ? (depConn?.container_state || 'STOPPED').toUpperCase()
+                          : 'NOT CREATED'}
+                      </span>
+                    </div>
+
+                    {/* 2. Docker Network */}
+                    <div className="p-3 rounded-lg bg-background/80 border border-border space-y-1.5">
+                      <span className="text-[11px] text-gray-400 block">Docker Network</span>
+                      {depConn?.container_networks && depConn.container_networks.length > 0 ? (
+                        <div className="flex flex-wrap gap-1.5">
+                          {depConn.container_networks.map((net: string) => (
+                            <span key={net} className="px-2 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20 font-mono text-[11px] font-semibold">
+                              {net}
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <span className="text-[11px] text-gray-500 font-mono">Belum terpasang ke network</span>
+                      )}
+                    </div>
+
+                    {/* 3. Konfigurasi Env Aktif */}
+                    <div className="p-3 rounded-lg bg-background/80 border border-border space-y-1">
+                      <div className="flex items-center justify-between gap-1">
+                        <span className="text-[11px] text-gray-400">Konfigurasi Env Aktif</span>
+                        <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase ${
+                          depConn?.env_matches_database
+                            ? 'bg-emerald-500/10 text-emerald-400'
+                            : 'bg-amber-500/10 text-amber-400'
+                        }`}>
+                          {depConn?.env_matches_database ? 'Cocok' : 'Tidak Cocok'}
+                        </span>
+                      </div>
+                      <div className="font-mono text-[11px] text-foreground truncate">
+                        {depConn?.env_db_connection || '?'}://{depConn?.env_db_host || '?'}/{depConn?.env_db_name || '?'}
+                      </div>
+                      <span className="text-[10px] text-gray-500 block">
+                        Sumber: {depConn?.env_source === 'container' ? 'Runtime Container' : depConn?.env_source === 'project_env' ? 'Project Env' : 'Belum dikonfigurasi'}
+                      </span>
+                    </div>
+
+                    {/* 4. Sesi DB Aktif */}
+                    <div className="p-3 rounded-lg bg-background/80 border border-border space-y-1">
+                      <span className="text-[11px] text-gray-400 block">Sesi DB Aktif</span>
+                      <div className="flex items-center gap-1.5 font-mono font-bold text-sm text-foreground">
+                        <Activity className="w-3.5 h-3.5 text-blue-400" />
+                        <span>{depConn?.active_db_sessions ?? dbInfo?.active_connections ?? 0} koneksi</span>
+                      </div>
+                      <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-semibold border ${
+                        dbInfo?.connected
+                          ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                          : 'bg-rose-500/10 text-rose-400 border-rose-500/20'
+                      }`}>
+                        DB Server: {dbInfo?.connected ? 'Online' : 'Offline'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+
             {/* Connection Details Grid */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-xs font-mono">
               <div className="p-3.5 rounded-xl bg-background border border-border">
@@ -1286,7 +1611,7 @@ export default function ProjectDetailPage() {
                     ? (dbInfo?.file_path || '/data/*.db')
                     : currentDbType === 'none'
                     ? 'N/A'
-                    : `${dbInfo?.host || '192.168.25.101'}:${dbInfo?.port || (currentDbType === 'mysql' ? 3306 : 5432)}`}
+                    : `${dbInfo?.host || project?.server_ip || '192.168.25.105'}:${dbInfo?.port || (currentDbType === 'mysql' ? 3306 : 5432)}`}
                 </span>
               </div>
               <div className="p-3.5 rounded-xl bg-background border border-border">
@@ -1355,71 +1680,412 @@ export default function ProjectDetailPage() {
                 )}
               </div>
             )}
+
+            {/* Project Ter-deploy yang Terhubung ke Database Ini */}
+            {currentDbType !== 'none' && (
+              <div className="space-y-3 pt-2 border-t border-border">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-semibold text-foreground flex items-center gap-1.5">
+                    <Server className="w-3.5 h-3.5 text-emerald-500" />
+                    <span>Project Ter-deploy yang Terhubung ke Database Ini ({dbInfo?.connected_projects?.length || 0})</span>
+                  </span>
+                </div>
+                {dbInfo?.connected_projects && dbInfo.connected_projects.length > 0 ? (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {dbInfo.connected_projects.map((cp: any) => (
+                      <Link
+                        key={cp.id}
+                        href={`/projects/${cp.id}`}
+                        className="flex items-center justify-between gap-3 p-3 rounded-xl bg-background border border-border hover:border-blue-500/40 transition-colors text-xs"
+                      >
+                        <div className="min-w-0 space-y-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-bold text-foreground truncate">{cp.name}</span>
+                            {cp.is_current_project && (
+                              <span className="px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-400 border border-blue-500/30 text-[10px] font-semibold">
+                                Project Ini
+                              </span>
+                            )}
+                            <span className="text-[11px] font-mono text-gray-400">{cp.framework}</span>
+                          </div>
+                          <div className="text-[11px] font-mono text-gray-400 truncate">
+                            {cp.domain} &bull; Port {cp.port_mappings}
+                            {cp.latest_deployment_version != null ? ` • v${cp.latest_deployment_version}` : ''}
+                          </div>
+                        </div>
+                        <span
+                          className={`shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold border ${
+                            cp.container_running
+                              ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                              : cp.container_exists
+                              ? 'bg-rose-500/10 text-rose-400 border-rose-500/20'
+                              : 'bg-gray-500/10 text-gray-400 border-border'
+                          }`}
+                        >
+                          <span className={`w-1.5 h-1.5 rounded-full ${cp.container_running ? 'bg-emerald-400 animate-pulse' : 'bg-gray-400'}`} />
+                          {cp.container_running ? 'Running' : cp.container_exists ? (cp.container_state || 'Stopped') : 'Not Deployed'}
+                        </span>
+                      </Link>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="p-3.5 rounded-lg bg-background border border-border text-xs text-gray-400">
+                    Belum ada project PSM lain yang terhubung ke database <code>{dbInfo?.db_name}</code>.
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
       )}
 
       {/* Tab: Environment Variables */}
-      {activeTab === 'environment' && (
-        <div className="space-y-6">
-          <div className="rounded-xl border border-border bg-card p-5 space-y-4">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-              <div>
-                <h3 className="font-bold text-sm text-foreground">Encrypted Environment Secrets</h3>
-                <p className="text-xs text-gray-500 mt-0.5">
-                  Variables are encrypted at rest with AES-Fernet encryption and merged with {dbTypeLabel} auto-connect credentials during deployment.
-                </p>
-              </div>
-              <button
-                onClick={() => handleProvisionDatabase()}
-                disabled={provisioningDb}
-                className="px-3 py-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-500 text-xs font-medium flex items-center gap-1.5 self-start"
-              >
-                <Database className="w-3.5 h-3.5" />
-                <span>Sync {dbTypeLabel} Env Vars</span>
-              </button>
-            </div>
+      {activeTab === 'environment' && (() => {
+        const q = envSearch.trim().toLowerCase();
+        const filteredEnvVars = q
+          ? envVars.filter(
+              (item) =>
+                item.key.toLowerCase().includes(q) ||
+                String(item.value ?? '').toLowerCase().includes(q)
+            )
+          : envVars;
 
-            {/* List */}
-            <div className="space-y-2">
-              {envVars.map((item) => (
-                <div
-                  key={item.key}
-                  className="flex items-center justify-between p-3 rounded-lg border border-border bg-background text-xs font-mono"
-                >
-                  <span className="font-bold text-foreground">{item.key}</span>
-                  <span className="text-gray-400">{item.masked_value}</span>
+        return (
+          <div className="space-y-6">
+            <div className="rounded-xl border border-border bg-card p-5 space-y-4">
+              {/* Header */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-border pb-4">
+                <div>
+                  <h3 className="font-bold text-sm text-foreground">Environment Variables (.env Editor &amp; Secrets)</h3>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    Edit variabel secara satuan atau mode teks <code>.env</code> lengkap. Disimpan terenkripsi AES-Fernet dan diterapkan ke container saat deploy.
+                  </p>
                 </div>
-              ))}
-            </div>
+                <button
+                  onClick={() => handleProvisionDatabase()}
+                  disabled={provisioningDb}
+                  className="px-3 py-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-500 text-xs font-medium flex items-center gap-1.5 self-start whitespace-nowrap"
+                >
+                  <Database className="w-3.5 h-3.5" />
+                  <span>Sync {dbTypeLabel} Env Vars</span>
+                </button>
+              </div>
 
-            {/* Add new variable */}
-            <form onSubmit={handleAddEnvVar} className="pt-4 border-t border-border flex gap-3 text-xs">
-              <input
-                type="text"
-                placeholder="VARIABLE_KEY"
-                value={newKey}
-                onChange={(e) => setNewKey(e.target.value)}
-                className="w-1/3 px-3 py-2 rounded-lg bg-background border border-border text-foreground font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-              <input
-                type="password"
-                placeholder="SECRET_VALUE"
-                value={newValue}
-                onChange={(e) => setNewValue(e.target.value)}
-                className="flex-1 px-3 py-2 rounded-lg bg-background border border-border text-foreground font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-              <button
-                type="submit"
-                className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-medium flex items-center gap-1"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>Save Secret</span>
-              </button>
-            </form>
+              {/* Notice & Redeploy Prompt */}
+              {envNotice && (
+                <div
+                  className={`p-3 rounded-xl border text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+                    envNotice.type === 'success'
+                      ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+                      : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    {envNotice.type === 'success' ? (
+                      <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                    ) : (
+                      <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                    )}
+                    <span>{envNotice.text}</span>
+                  </div>
+                  {envNotice.needsRedeploy && (
+                    <button
+                      onClick={handleTriggerDeploy}
+                      disabled={deploying}
+                      className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-semibold flex items-center gap-1.5 whitespace-nowrap self-start sm:self-auto"
+                    >
+                      <Rocket className="w-3.5 h-3.5" />
+                      <span>{deploying ? 'Deploying...' : 'Deploy Ulang Sekarang'}</span>
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {/* Toolbar */}
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                <div className="flex items-center gap-2 flex-1">
+                  {envEditorMode === 'list' && (
+                    <div className="relative flex-1 max-w-sm">
+                      <Search className="w-3.5 h-3.5 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                      <input
+                        type="text"
+                        placeholder="Cari key atau nilai variable..."
+                        value={envSearch}
+                        onChange={(e) => setEnvSearch(e.target.value)}
+                        className="w-full pl-8 pr-3 py-1.5 rounded-lg bg-background border border-border text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2 flex-wrap text-xs">
+                  {envEditorMode === 'list' && (
+                    <button
+                      type="button"
+                      onClick={() => setRevealAllEnv((v) => !v)}
+                      className="px-3 py-1.5 rounded-lg border border-border hover:bg-background text-foreground flex items-center gap-1.5 transition-colors"
+                    >
+                      {revealAllEnv ? <EyeOff className="w-3.5 h-3.5 text-amber-400" /> : <Eye className="w-3.5 h-3.5 text-blue-400" />}
+                      <span>{revealAllEnv ? 'Sembunyikan Semua' : 'Tampilkan Semua Nilai'}</span>
+                    </button>
+                  )}
+
+                  <div className="inline-flex rounded-lg border border-border bg-background p-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setEnvEditorMode('list')}
+                      className={`px-3 py-1 rounded-md flex items-center gap-1.5 font-medium transition-colors ${
+                        envEditorMode === 'list' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-foreground'
+                      }`}
+                    >
+                      <List className="w-3.5 h-3.5" />
+                      <span>Mode Daftar ({envVars.length})</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setBulkEnvText(envVars.map((v: any) => `${v.key}=${v.value ?? ''}`).join('\n'));
+                        setEnvEditorMode('bulk');
+                      }}
+                      className={`px-3 py-1 rounded-md flex items-center gap-1.5 font-medium transition-colors ${
+                        envEditorMode === 'bulk' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-foreground'
+                      }`}
+                    >
+                      <FileText className="w-3.5 h-3.5" />
+                      <span>Editor .env (Bulk)</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {envEditorMode === 'list' ? (
+                <>
+                  {/* Key-Value List */}
+                  <div className="space-y-2">
+                    {filteredEnvVars.length === 0 ? (
+                      <div className="p-6 text-center rounded-lg border border-dashed border-border text-xs text-gray-500">
+                        {envVars.length === 0
+                          ? 'Belum ada environment variable. Tambahkan di bawah atau gunakan Sync Database.'
+                          : 'Tidak ada variable yang cocok dengan pencarian Anda.'}
+                      </div>
+                    ) : (
+                      filteredEnvVars.map((item) => {
+                        const isEditing = editingEnvOriginalKey === item.key;
+                        const visible = isEnvValueVisible(item.key);
+                        const hasPlainValue = item.value !== null && item.value !== undefined;
+                        const displayVal = visible
+                          ? hasPlainValue
+                            ? item.value === ''
+                              ? '(kosong)'
+                              : item.value
+                            : item.masked_value
+                          : item.masked_value || '••••••••';
+
+                        if (isEditing) {
+                          return (
+                            <form
+                              key={item.key}
+                              onSubmit={handleSaveEditEnv}
+                              className="p-3 rounded-lg border border-blue-500/40 bg-blue-500/5 flex flex-col sm:flex-row items-stretch sm:items-center gap-2 text-xs font-mono"
+                            >
+                              <input
+                                type="text"
+                                value={editingEnvKey}
+                                onChange={(e) => setEditingEnvKey(e.target.value)}
+                                placeholder="KEY"
+                                className="sm:w-1/3 px-3 py-1.5 rounded-lg bg-background border border-border text-foreground font-bold focus:outline-none focus:ring-2 focus:ring-blue-500"
+                              />
+                              <div className="relative flex-1 flex items-center">
+                                <input
+                                  type={showEditEnvValue ? 'text' : 'password'}
+                                  value={editingEnvValue}
+                                  onChange={(e) => setEditingEnvValue(e.target.value)}
+                                  placeholder="VALUE"
+                                  className="w-full pl-3 pr-9 py-1.5 rounded-lg bg-background border border-border text-foreground focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => setShowEditEnvValue((s) => !s)}
+                                  className="absolute right-2.5 text-gray-400 hover:text-foreground"
+                                  title={showEditEnvValue ? 'Sembunyikan' : 'Tampilkan'}
+                                >
+                                  {showEditEnvValue ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                                </button>
+                              </div>
+                              <div className="flex items-center gap-1.5 font-sans">
+                                <button
+                                  type="submit"
+                                  disabled={savingEnv}
+                                  className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold flex items-center gap-1 disabled:opacity-50"
+                                >
+                                  <Save className="w-3.5 h-3.5" />
+                                  <span>Simpan</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={handleCancelEditEnv}
+                                  className="px-2.5 py-1.5 rounded-lg border border-border hover:bg-background text-gray-300 flex items-center gap-1"
+                                >
+                                  <X className="w-3.5 h-3.5" />
+                                  <span>Batal</span>
+                                </button>
+                              </div>
+                            </form>
+                          );
+                        }
+
+                        return (
+                          <div
+                            key={item.key}
+                            className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-3 rounded-lg border border-border bg-background text-xs font-mono hover:border-gray-600 transition-colors"
+                          >
+                            <div className="flex flex-col sm:flex-row sm:items-center gap-2 min-w-0 flex-1">
+                              <span className="font-bold text-foreground sm:w-56 shrink-0 truncate" title={item.key}>
+                                {item.key}
+                              </span>
+                              <span
+                                className={`truncate flex-1 ${
+                                  visible && item.value === '' ? 'italic text-gray-500' : 'text-gray-300'
+                                }`}
+                                title={visible && hasPlainValue ? String(item.value) : undefined}
+                              >
+                                {displayVal}
+                              </span>
+                            </div>
+
+                            <div className="flex items-center gap-1 shrink-0 font-sans">
+                              <button
+                                type="button"
+                                onClick={() => toggleRevealEnvKey(item.key)}
+                                className="p-1.5 rounded-md border border-border hover:bg-card text-gray-400 hover:text-foreground transition-colors"
+                                title={visible ? 'Sembunyikan nilai' : 'Tampilkan nilai'}
+                              >
+                                {visible ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleCopyEnvValue(item.key, String(item.value ?? item.masked_value ?? ''))}
+                                className="p-1.5 rounded-md border border-border hover:bg-card text-gray-400 hover:text-foreground transition-colors"
+                                title="Salin nilai"
+                              >
+                                {copiedEnvKey === item.key ? (
+                                  <Check className="w-3.5 h-3.5 text-emerald-400" />
+                                ) : (
+                                  <Copy className="w-3.5 h-3.5" />
+                                )}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleStartEditEnv(item)}
+                                className="px-2 py-1.5 rounded-md border border-border hover:border-blue-500/40 hover:bg-blue-500/10 text-blue-400 flex items-center gap-1 transition-colors"
+                                title="Edit key / value"
+                              >
+                                <Pencil className="w-3 h-3" />
+                                <span>Edit</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteEnvVar(item.key)}
+                                disabled={savingEnv}
+                                className="p-1.5 rounded-md border border-border hover:border-rose-500/40 hover:bg-rose-500/10 text-rose-400 transition-colors disabled:opacity-50"
+                                title="Hapus variable"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+
+                  {/* Add new variable */}
+                  <form onSubmit={handleAddEnvVar} className="pt-4 border-t border-border flex flex-col sm:flex-row gap-3 text-xs">
+                    <input
+                      type="text"
+                      placeholder="VARIABLE_KEY (contoh: APP_ENV)"
+                      value={newKey}
+                      onChange={(e) => setNewKey(e.target.value)}
+                      className="sm:w-1/3 px-3 py-2 rounded-lg bg-background border border-border text-foreground font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                    <div className="relative flex-1 flex items-center">
+                      <input
+                        type={showNewEnvValue ? 'text' : 'password'}
+                        placeholder="VALUE (contoh: local)"
+                        value={newValue}
+                        onChange={(e) => setNewValue(e.target.value)}
+                        className="w-full pl-3 pr-9 py-2 rounded-lg bg-background border border-border text-foreground font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowNewEnvValue((s) => !s)}
+                        className="absolute right-2.5 text-gray-400 hover:text-foreground"
+                        title={showNewEnvValue ? 'Sembunyikan' : 'Tampilkan'}
+                      >
+                        {showNewEnvValue ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                      </button>
+                    </div>
+                    <button
+                      type="submit"
+                      disabled={savingEnv || !newKey.trim()}
+                      className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-medium flex items-center justify-center gap-1.5 disabled:opacity-50 whitespace-nowrap"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Tambah Variable</span>
+                    </button>
+                  </form>
+                </>
+              ) : (
+                /* Bulk .env Text Editor */
+                <div className="space-y-3">
+                  <div className="rounded-lg border border-border bg-[#0d1117] overflow-hidden">
+                    <textarea
+                      value={bulkEnvText}
+                      onChange={(e) => setBulkEnvText(e.target.value)}
+                      rows={16}
+                      spellCheck={false}
+                      placeholder="# Paste atau edit file .env di sini (KEY=VALUE)&#10;APP_ENV=local&#10;APP_URL=http://100.78.113.53:3101"
+                      className="w-full p-4 bg-transparent text-gray-200 font-mono text-xs focus:outline-none resize-y leading-relaxed"
+                    />
+                  </div>
+                  <div className="flex flex-wrap items-center justify-between gap-3 text-xs">
+                    <span className="text-gray-400">
+                      Mendukung baris komentar <code>#</code>, baris kosong, dan tanda petik di nilai.
+                    </span>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <button
+                        type="button"
+                        onClick={() => setBulkEnvText(envVars.map((v: any) => `${v.key}=${v.value ?? ''}`).join('\n'))}
+                        className="px-3 py-2 rounded-lg border border-border hover:bg-background text-gray-300 font-medium"
+                      >
+                        Reset
+                      </button>
+                      <button
+                        type="button"
+                        disabled={savingEnv}
+                        onClick={() => handleSaveBulkEnv(false)}
+                        className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold flex items-center gap-1.5 disabled:opacity-50"
+                      >
+                        <Save className="w-3.5 h-3.5" />
+                        <span>{savingEnv ? 'Menyimpan...' : 'Simpan Semua (.env)'}</span>
+                      </button>
+                      <button
+                        type="button"
+                        disabled={savingEnv || deploying}
+                        onClick={() => handleSaveBulkEnv(true)}
+                        className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-semibold flex items-center gap-1.5 disabled:opacity-50"
+                      >
+                        <Rocket className="w-3.5 h-3.5" />
+                        <span>{deploying ? 'Deploying...' : 'Simpan & Deploy Ulang'}</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Tab: Overview / Source */}
       {activeTab === 'overview' && (

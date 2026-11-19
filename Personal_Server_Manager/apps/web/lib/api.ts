@@ -335,8 +335,8 @@ export const api = {
     return res.json();
   },
 
-  async getProjectEnvironment(id: string) {
-    const res = await fetchWithAuth(`/api/v1/projects/${id}/environment`);
+  async getProjectEnvironment(id: string, reveal = false) {
+    const res = await fetchWithAuth(`/api/v1/projects/${id}/environment?reveal=${reveal ? 'true' : 'false'}`);
     return res.ok ? res.json() : [];
   },
 
@@ -345,6 +345,34 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ variables }),
     });
+    if (!res.ok) {
+      throw new Error(await extractApiErrorMessage(res, 'Failed to update environment variables'));
+    }
+    return res.json();
+  },
+
+  async upsertProjectEnvVar(
+    id: string,
+    data: { key: string; value: string; original_key?: string }
+  ) {
+    const res = await fetchWithAuth(`/api/v1/projects/${id}/environment/item`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+    if (!res.ok) {
+      throw new Error(await extractApiErrorMessage(res, 'Failed to save environment variable'));
+    }
+    return res.json();
+  },
+
+  async deleteProjectEnvVar(id: string, key: string) {
+    const res = await fetchWithAuth(
+      `/api/v1/projects/${id}/environment/${encodeURIComponent(key)}`,
+      { method: 'DELETE' }
+    );
+    if (!res.ok) {
+      throw new Error(await extractApiErrorMessage(res, 'Failed to delete environment variable'));
+    }
     return res.json();
   },
 
@@ -368,6 +396,11 @@ export const api = {
   async getAllPostgresDatabases() {
     const res = await fetchWithAuth('/api/v1/projects/databases/list');
     return res.ok ? res.json() : { databases: [] };
+  },
+
+  async getDatabasesOverview() {
+    const res = await fetchWithAuth('/api/v1/projects/databases/overview');
+    return res.ok ? res.json() : { databases: [], summary: null };
   },
 
   async getProjectContainer(projectId: string) {
