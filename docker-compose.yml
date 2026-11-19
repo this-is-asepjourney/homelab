@@ -262,7 +262,10 @@ services:
       retries: 10
       start_period: 15s
     networks:
-      - homelab
+      homelab:
+        # psm-web image bakes INTERNAL_API_URL=http://api:8000 into Next.js rewrites at build time
+        aliases:
+          - api
 
   psm-agent:
     build:
@@ -293,6 +296,8 @@ services:
     build:
       context: ./Personal_Server_Manager
       dockerfile: infrastructure/docker/Dockerfile.web
+      args:
+        INTERNAL_API_URL: http://psm-api:8000
     container_name: psm-web
     restart: unless-stopped
     ports:
