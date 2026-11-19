@@ -1,0 +1,2086 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PAP Core — Homelab Central API Gateway & Realtime Project Topology</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🛡️</text></svg>">
+  <style>
+    :root {
+      --bg-dark: #070b14;
+      --bg-surface: #0d1527;
+      --bg-card: #131d33;
+      --bg-card-hover: #1c2b4a;
+      --border-color: #202f4f;
+      --border-glow: rgba(59, 130, 246, 0.4);
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --primary: #3b82f6;
+      --primary-glow: #60a5fa;
+      --primary-hover: #2563eb;
+      --cyan: #06b6d4;
+      --cyan-glow: #22d3ee;
+      --success: #10b981;
+      --success-glow: #34d399;
+      --warning: #f59e0b;
+      --warning-glow: #fbbf24;
+      --danger: #ef4444;
+      --purple: #8b5cf6;
+      --purple-glow: #a78bfa;
+      --radius: 12px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+    body { background-color: var(--bg-dark); color: var(--text-main); min-height: 100vh; display: flex; flex-direction: column; overflow-x: hidden; }
+
+    /* HEADER */
+    header {
+      background: linear-gradient(180deg, #0f1a30 0%, #0d1527 100%);
+      border-bottom: 1px solid var(--border-color);
+      padding: 0.9rem 1.5rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 1rem;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+      position: sticky;
+      top: 0;
+      z-index: 50;
+    }
+    .brand { display: flex; align-items: center; gap: 0.85rem; }
+    .brand-icon {
+      font-size: 1.8rem;
+      background: linear-gradient(135deg, #2563eb, #7c3aed);
+      border-radius: 10px;
+      padding: 6px 10px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 0 15px rgba(59, 130, 246, 0.5);
+    }
+    .brand-title {
+      font-size: 1.25rem;
+      font-weight: 800;
+      letter-spacing: -0.5px;
+      background: linear-gradient(90deg, #ffffff, #93c5fd);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .brand-subtitle { font-size: 0.75rem; color: var(--text-muted); }
+    .header-badges { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.35rem 0.75rem;
+      border-radius: 9999px;
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+    .badge-success { background-color: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); }
+    .badge-info { background-color: rgba(59, 130, 246, 0.15); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.3); }
+    .badge-cyan { background-color: rgba(6, 182, 212, 0.15); color: #22d3ee; border: 1px solid rgba(6, 182, 212, 0.3); }
+    .badge-purple { background-color: rgba(139, 92, 246, 0.15); color: #c084fc; border: 1px solid rgba(139, 92, 246, 0.3); }
+    .badge-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background-color: currentColor;
+      display: inline-block;
+      box-shadow: 0 0 8px currentColor;
+    }
+    .pulse-dot {
+      animation: pulse 1.5s infinite;
+    }
+    .pulse-dot-red {
+      background-color: #ef4444 !important;
+      box-shadow: 0 0 10px #ef4444 !important;
+      animation: pulseRed 1.2s infinite !important;
+    }
+    @keyframes pulseRed {
+      0% { transform: scale(0.95); opacity: 0.8; }
+      50% { transform: scale(1.35); opacity: 1; }
+      100% { transform: scale(0.95); opacity: 0.8; }
+    }
+    .topo-node {
+      transition: filter 0.2s cubic-bezier(0.16, 1, 0.3, 1), transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+      transform-origin: center;
+      cursor: pointer;
+    }
+    .topo-node:hover {
+      filter: drop-shadow(0 0 14px rgba(96, 165, 250, 0.7));
+    }
+    .stream-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.4rem 0.85rem;
+      border-radius: 9999px;
+      font-size: 0.75rem;
+      font-weight: 700;
+      background: rgba(16, 185, 129, 0.12);
+      color: #34d399;
+      border: 1px solid rgba(16, 185, 129, 0.3);
+      box-shadow: 0 0 12px rgba(16, 185, 129, 0.2);
+    }
+    .stream-pill.disconnected {
+      background: rgba(239, 68, 68, 0.12);
+      color: #f87171;
+      border-color: rgba(239, 68, 68, 0.3);
+      box-shadow: none;
+    }
+    .mode-switch-group {
+      display: inline-flex;
+      background: #0b1324;
+      border: 1px solid #203158;
+      border-radius: 10px;
+      padding: 3px;
+      gap: 4px;
+    }
+    .mode-btn {
+      padding: 0.4rem 0.85rem;
+      border-radius: 7px;
+      font-size: 0.78rem;
+      font-weight: 700;
+      cursor: pointer;
+      border: none;
+      background: transparent;
+      color: var(--text-muted);
+      transition: all 0.2s;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+    }
+    .mode-btn:hover { color: #fff; }
+    .mode-btn.active {
+      background: linear-gradient(135deg, #1d4ed8, #2563eb);
+      color: #fff;
+      box-shadow: 0 2px 8px rgba(37, 99, 235, 0.4);
+    }
+    @keyframes pulse {
+      0% { transform: scale(0.95); opacity: 0.7; }
+      50% { transform: scale(1.3); opacity: 1; }
+      100% { transform: scale(0.95); opacity: 0.7; }
+    }
+    .quick-links { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+    .quick-link-btn {
+      background: #1e293b;
+      color: #e2e8f0;
+      text-decoration: none;
+      padding: 0.35rem 0.7rem;
+      border-radius: 6px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      border: 1px solid #334155;
+      transition: all 0.2s;
+    }
+    .quick-link-btn:hover { background: #3b82f6; border-color: #60a5fa; color: #fff; transform: translateY(-1px); }
+
+    /* NAV TABS */
+    .nav-tabs {
+      display: flex;
+      gap: 0.5rem;
+      padding: 0.65rem 1.5rem;
+      background-color: #090e1a;
+      border-bottom: 1px solid var(--border-color);
+      overflow-x: auto;
+      position: sticky;
+      top: 61px;
+      z-index: 45;
+    }
+    .nav-tab {
+      background: transparent;
+      border: 1px solid transparent;
+      color: var(--text-muted);
+      padding: 0.5rem 1.1rem;
+      border-radius: 8px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      transition: all 0.2s;
+      white-space: nowrap;
+    }
+    .nav-tab:hover { color: #fff; background-color: rgba(255, 255, 255, 0.05); }
+    .nav-tab.active {
+      color: #ffffff;
+      background: linear-gradient(135deg, #1d4ed8, #2563eb);
+      border-color: #60a5fa;
+      box-shadow: 0 0 12px rgba(37, 99, 235, 0.4);
+    }
+
+    /* MAIN CONTAINER */
+    main { flex: 1; padding: 1.5rem; max-width: 1450px; width: 100%; margin: 0 auto; }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; animation: fadeIn 0.25s ease-in-out; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+
+    /* CARDS & GRIDS */
+    .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1.25rem; margin-bottom: 1.5rem; }
+    .grid-3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1.25rem; margin-bottom: 1.5rem; }
+    .grid-4 { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+    .grid-5 { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 0.85rem; margin-bottom: 1.25rem; }
+    
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius);
+      padding: 1.25rem;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.25);
+      position: relative;
+    }
+    .card-title {
+      font-size: 1rem;
+      font-weight: 700;
+      margin-bottom: 0.85rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      color: #f1f5f9;
+    }
+    .card-stat { font-size: 1.75rem; font-weight: 800; color: #ffffff; margin-bottom: 0.25rem; letter-spacing: -0.5px; }
+    .card-desc { font-size: 0.78rem; color: var(--text-muted); font-weight: 500; }
+
+    /* TOPOLOGY CANVAS CONTAINER */
+    .topology-container {
+      background: radial-gradient(circle at center, #111d38 0%, #0a1122 70%, #060a14 100%);
+      border: 1px solid #23355b;
+      border-radius: var(--radius);
+      padding: 1.5rem;
+      position: relative;
+      overflow: hidden;
+      box-shadow: 0 8px 30px rgba(0,0,0,0.5);
+      margin-bottom: 1.5rem;
+    }
+    .topology-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 1rem;
+      margin-bottom: 1rem;
+      padding-bottom: 0.75rem;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+    }
+    .topology-svg-wrapper {
+      position: relative;
+      width: 100%;
+      height: 480px;
+      border-radius: 10px;
+      background: rgba(4, 8, 18, 0.4);
+      border: 1px solid rgba(59, 130, 246, 0.2);
+      overflow: hidden;
+    }
+    #topology-canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 10;
+    }
+    #topology-svg {
+      width: 100%;
+      height: 100%;
+      z-index: 5;
+    }
+
+    /* SIMULATION ACTION BUTTONS */
+    .sim-controls-panel {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.6rem;
+      align-items: center;
+      margin-bottom: 1.25rem;
+      padding: 0.85rem 1rem;
+      background: #0d172e;
+      border: 1px solid #203158;
+      border-radius: 10px;
+    }
+    .sim-btn {
+      padding: 0.55rem 0.95rem;
+      border-radius: 8px;
+      font-size: 0.8rem;
+      font-weight: 700;
+      cursor: pointer;
+      border: 1px solid transparent;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.45rem;
+      transition: all 0.2s;
+    }
+    .sim-btn:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
+    .sim-btn-cyan { background: rgba(6, 182, 212, 0.2); color: #22d3ee; border-color: rgba(6, 182, 212, 0.4); }
+    .sim-btn-cyan:hover { background: #06b6d4; color: #fff; }
+    .sim-btn-emerald { background: rgba(16, 185, 129, 0.2); color: #34d399; border-color: rgba(16, 185, 129, 0.4); }
+    .sim-btn-emerald:hover { background: #10b981; color: #fff; }
+    .sim-btn-amber { background: rgba(245, 158, 11, 0.2); color: #fbbf24; border-color: rgba(245, 158, 11, 0.4); }
+    .sim-btn-amber:hover { background: #f59e0b; color: #fff; }
+    .sim-btn-purple { background: rgba(139, 92, 246, 0.2); color: #c084fc; border-color: rgba(139, 92, 246, 0.4); }
+    .sim-btn-purple:hover { background: #8b5cf6; color: #fff; }
+    .sim-btn-rose { background: rgba(244, 63, 94, 0.2); color: #fb7185; border-color: rgba(244, 63, 94, 0.4); }
+    .sim-btn-rose:hover { background: #f43f5e; color: #fff; }
+    .sim-btn-auto { background: #1e293b; color: #f8fafc; border-color: #475569; margin-left: auto; }
+    .sim-btn-auto.active { background: #10b981; border-color: #34d399; color: #fff; box-shadow: 0 0 12px rgba(16,185,129,0.5); }
+
+    /* REALTIME TERMINAL LOG */
+    .terminal-box {
+      background: #040813;
+      border: 1px solid #1c2b48;
+      border-radius: 10px;
+      padding: 1rem;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.78rem;
+      color: #94a3b8;
+      height: 220px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column-reverse;
+      box-shadow: inset 0 2px 10px rgba(0,0,0,0.6);
+    }
+    .terminal-row { padding: 0.25rem 0; border-bottom: 1px solid rgba(255,255,255,0.03); line-height: 1.45; word-break: break-all; }
+    .log-time { color: #64748b; margin-right: 0.5rem; }
+    .log-tag-nfc { color: #34d399; font-weight: bold; }
+    .log-tag-mqtt { color: #38bdf8; font-weight: bold; }
+    .log-tag-db { color: #fbbf24; font-weight: bold; }
+    .log-tag-api { color: #a78bfa; font-weight: bold; }
+    .log-tag-sys { color: #f43f5e; font-weight: bold; }
+
+    /* BUTTONS */
+    .btn { display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem; padding: 0.55rem 1.1rem; border-radius: 8px; font-size: 0.85rem; font-weight: 600; cursor: pointer; border: none; transition: all 0.2s; text-decoration: none; }
+    .btn-primary { background-color: var(--primary); color: #ffffff; }
+    .btn-primary:hover { background-color: var(--primary-hover); transform: translateY(-1px); }
+    .btn-danger { background-color: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
+    .btn-danger:hover { background-color: rgba(239, 68, 68, 0.3); }
+    .btn-sm { padding: 0.3rem 0.65rem; font-size: 0.75rem; border-radius: 6px; }
+
+    /* TABLES & FORMS */
+    .table-container { overflow-x: auto; border: 1px solid var(--border-color); border-radius: var(--radius); background-color: var(--bg-card); }
+    table { width: 100%; border-collapse: collapse; text-align: left; font-size: 0.85rem; }
+    th { background-color: rgba(0,0,0,0.3); padding: 0.75rem 1rem; color: var(--text-muted); font-weight: 600; text-transform: uppercase; font-size: 0.7rem; letter-spacing: 0.5px; }
+    td { padding: 0.8rem 1rem; border-bottom: 1px solid rgba(255,255,255,0.05); }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background-color: rgba(255,255,255,0.03); }
+    .status-list { list-style: none; display: flex; flex-direction: column; gap: 0.75rem; }
+    .status-item { display: flex; justify-content: space-between; align-items: center; padding: 0.65rem 0.85rem; background: rgba(0,0,0,0.25); border-radius: 8px; font-size: 0.85rem; border: 1px solid rgba(255,255,255,0.03); }
+    .status-name { display: flex; align-items: center; gap: 0.5rem; font-weight: 600; }
+    .form-group { display: flex; flex-direction: column; gap: 0.35rem; margin-bottom: 1rem; }
+    .form-label { font-size: 0.8rem; font-weight: 600; color: var(--text-muted); }
+    .form-control { background-color: #0b1120; border: 1px solid var(--border-color); border-radius: 8px; padding: 0.6rem 0.75rem; color: #fff; font-size: 0.85rem; }
+    .form-control:focus { outline: none; border-color: var(--primary); }
+
+    /* MODAL */
+    .modal-backdrop { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.75); backdrop-filter: blur(5px); z-index: 100; align-items: center; justify-content: center; }
+    .modal-backdrop.active { display: flex; }
+    .modal-box { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 14px; width: 90%; max-width: 600px; max-height: 85vh; overflow-y: auto; padding: 1.5rem; box-shadow: 0 25px 35px -5px rgba(0,0,0,0.7); }
+    .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.25rem; padding-bottom: 0.75rem; border-bottom: 1px solid var(--border-color); }
+    .modal-title { font-size: 1.1rem; font-weight: 700; }
+    .modal-close { background: none; border: none; color: var(--text-muted); font-size: 1.5rem; cursor: pointer; }
+    .code-preview { background-color: #080c14; border: 1px solid var(--border-color); border-radius: 8px; padding: 0.75rem; font-family: monospace; font-size: 0.75rem; color: #38bdf8; overflow-x: auto; max-height: 300px; white-space: pre-wrap; }
+    .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid rgba(255,255,255,0.3); border-radius: 50%; border-top-color: #fff; animation: spin 0.8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    footer { border-top: 1px solid var(--border-color); padding: 1rem 1.5rem; text-align: center; font-size: 0.75rem; color: var(--text-muted); background: #060912; }
+  </style>
+</head>
+<body>
+
+  <!-- HEADER -->
+  <header>
+    <div class="brand">
+      <div class="brand-icon">🛡️</div>
+      <div>
+        <div class="brand-title">PAP Core • Mission Control</div>
+        <div class="brand-subtitle">Central API Gateway &bull; IoT Orchestrator &bull; PSM Engine</div>
+      </div>
+    </div>
+    <div class="header-badges">
+      <span class="badge badge-success"><span class="badge-dot pulse-dot"></span> Core API :8000 Online</span>
+      <span class="badge badge-info"><span class="badge-dot"></span> Host: 192.168.25.101</span>
+      <span class="badge badge-purple"><span class="badge-dot"></span> Tailscale: 100.106.63.90</span>
+      <div class="quick-links">
+        <a href="http://192.168.25.101:3005" target="_blank" class="quick-link-btn">🖥️ PSM (:3005)</a>
+        <a href="http://192.168.25.101:8088" target="_blank" class="quick-link-btn">📟 HeatpressHub (:8088)</a>
+        <a href="http://192.168.25.101:3001" target="_blank" class="quick-link-btn">📊 Grafana (:3001)</a>
+        <a href="/docs" target="_blank" class="quick-link-btn">📖 Swagger Docs</a>
+      </div>
+    </div>
+  </header>
+
+  <!-- NAVIGATION TABS -->
+  <nav class="nav-tabs">
+    <button class="nav-tab active" onclick="switchTab('tab-topology')">📡 Diagram Arsitektur &amp; Simulasi Realtime</button>
+    <button class="nav-tab" onclick="switchTab('tab-overview')">📊 Ringkasan Sistem</button>
+    <button class="nav-tab" onclick="switchTab('tab-backups')">💾 Backup &amp; Disaster Recovery</button>
+    <button class="nav-tab" onclick="switchTab('tab-iot')">📟 IoT Heatpress Fleet &amp; NFC</button>
+    <button class="nav-tab" onclick="switchTab('tab-dns')">🌐 Local DNS &amp; Virtual Hosts</button>
+    <button class="nav-tab" onclick="switchTab('tab-containers')">🐳 Layanan &amp; Kontainer</button>
+    <button class="nav-tab" onclick="switchTab('tab-api')">🔌 Gateway API Explorer</button>
+  </nav>
+
+  <!-- MAIN CONTENT -->
+  <main>
+
+    <!-- TAB 1: ARSITEKTUR & SIMULASI REALTIME (NEW & INTERACTIVE) -->
+    <div id="tab-topology" class="tab-content active">
+      
+      <!-- KPI STATUS ROW -->
+      <div class="grid-4" style="margin-bottom: 1.25rem;">
+        <div class="card" style="border-left: 4px solid var(--primary);">
+          <div class="card-desc">Central API Core</div>
+          <div class="card-stat" style="color: #60a5fa;">:8000</div>
+          <div class="card-desc">PAP + PSM + IoT Unified Gateway</div>
+        </div>
+        <div class="card" style="border-left: 4px solid var(--success);">
+          <div class="card-desc">Total Permintaan API (Realtime)</div>
+          <div class="card-stat" style="color: #34d399;" id="sim-packet-count">0</div>
+          <div class="card-desc">Paket REST, WebSocket &amp; MQTT</div>
+        </div>
+        <div class="card" style="border-left: 4px solid var(--cyan);">
+          <div class="card-desc">Latensi Rata-rata Gateway</div>
+          <div class="card-stat" style="color: #22d3ee;" id="sim-latency">1.2 ms</div>
+          <div class="card-desc">Durasi Eksekusi Server Asli</div>
+        </div>
+        <div class="card" style="border-left: 4px solid var(--purple);">
+          <div class="card-desc">Mode Aliran Trafik</div>
+          <div class="card-stat" style="color: #c084fc; font-size: 1.35rem;" id="active-mode-label">🔴 Live Stream</div>
+          <div class="card-desc">100% Real-time Server Traffic</div>
+        </div>
+      </div>
+
+      <!-- INTERACTIVE TOPOLOGY DIAGRAM -->
+      <div class="topology-container">
+        <div class="topology-header">
+          <div>
+            <div style="font-size: 1.15rem; font-weight: 800; color: #fff; display: flex; align-items: center; gap: 0.65rem; flex-wrap: wrap;">
+              <span>⚡ Peta Arsitektur Komunikasi API Homelab Server</span>
+              <span id="stream-status-pill" class="stream-pill">
+                <span class="badge-dot pulse-dot pulse-dot-red"></span>
+                <span id="stream-status-text">🔴 LIVE REALTIME API STREAM</span>
+              </span>
+              <span class="badge badge-info" style="font-size: 0.7rem;">60-120 FPS BUTTERY SMOOTH</span>
+            </div>
+            <div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 0.25rem;">
+              Visualisasi real-time jalur komunikasi fisik antar Hardware ESP32, Dashboard Web, Mosquitto MQTT, dan Database (Postgres/MySQL). Setiap request nyata ke API akan memicu aliran paket data secara instan!
+            </div>
+          </div>
+          <div style="display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap;">
+            <!-- MODE TOGGLE -->
+            <div class="mode-switch-group">
+              <button class="mode-btn active" id="btn-mode-live" onclick="setLiveMode(true)">
+                <span>🔴</span> Live API Stream
+              </button>
+              <button class="mode-btn" id="btn-mode-sim" onclick="setLiveMode(false)">
+                <span>🧪</span> Uji Coba Manual
+              </button>
+            </div>
+            <button class="sim-btn sim-btn-auto" id="btn-toggle-auto" style="display: none;" onclick="toggleAutoSimulation()">
+              <span id="auto-status-indicator">▶️ Auto Test Generator</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- SVG TOPOLOGY GRAPH + CANVAS OVERLAY -->
+        <div class="topology-svg-wrapper">
+          <canvas id="topology-canvas"></canvas>
+          
+          <svg id="topology-svg" viewBox="0 0 1020 500" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <linearGradient id="coreGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stop-color="#1e40af"/>
+                <stop offset="100%" stop-color="#3b82f6"/>
+              </linearGradient>
+              <linearGradient id="nodeGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stop-color="#1e293b"/>
+                <stop offset="100%" stop-color="#0f172a"/>
+              </linearGradient>
+              <filter id="glowCore" x="-20%" y="-20%" width="140%" height="140%">
+                <feGaussianBlur stdDeviation="8" result="blur"/>
+                <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+              </filter>
+            </defs>
+
+            <!-- CONNECTION LINES (Dashed glow cables) -->
+            <g id="svg-paths" stroke="#253556" stroke-width="2" stroke-dasharray="6,6">
+              <!-- Router to Core & Apps -->
+              <path id="path-router-core" d="M 510,78 L 510,188" />
+              <path id="path-router-hub" d="M 420,52 Q 260,52 145,207" />
+              <path id="path-router-psm" d="M 600,52 Q 760,52 870,77" />
+              <path id="path-router-grafana" d="M 600,52 Q 780,180 850,405" />
+
+              <!-- Core to ESP32 Hardware -->
+              <path id="path-core-esp32" d="M 510,240 Q 310,130 228,110" />
+              <!-- Core to HeatpressHub Web -->
+              <path id="path-core-hub" d="M 510,240 L 228,240" />
+              <!-- Core to Stock UMKM POS -->
+              <path id="path-core-stock" d="M 510,240 Q 310,340 233,390" />
+
+              <!-- Core to PSM Control Plane -->
+              <path id="path-core-psm" d="M 510,240 Q 710,130 788,110" />
+              <!-- Core to Mosquitto MQTT -->
+              <path id="path-core-mqtt" d="M 510,240 Q 700,230 788,220" />
+              <!-- Core to InfluxDB TSDB -->
+              <path id="path-core-influx" d="M 510,240 Q 700,290 788,325" />
+              <!-- Core to Grafana -->
+              <path id="path-core-grafana" d="M 510,240 Q 690,360 768,435" />
+
+              <!-- Core to MySQL 8.4 Server -->
+              <path id="path-core-mysql" d="M 510,240 Q 430,370 370,407" />
+              <!-- Core to PostgreSQL Server -->
+              <path id="path-core-postgres" d="M 510,240 Q 590,370 650,407" />
+
+              <!-- Direct Inter-Service Pipelines -->
+              <path id="path-esp32-mqtt" d="M 145,77 Q 510,90 788,220" />
+              <path id="path-mqtt-influx" d="M 870,249 L 870,296" />
+              <path id="path-influx-grafana" d="M 870,354 L 850,405" />
+              <path id="path-mysql-grafana" d="M 443,435 Q 640,485 768,435" />
+              <path id="path-mysql-stock" d="M 298,435 Q 230,440 190,423" />
+            </g>
+
+            <!-- NODES -->
+
+            <!-- 0. INGRESS ROUTER & LOCAL DNS (TOP CENTER) -->
+            <g id="node-router" class="topo-node" transform="translate(510, 52)">
+              <rect x="-90" y="-26" width="180" height="52" rx="10" fill="url(#nodeGrad)" stroke="#38bdf8" stroke-width="2"/>
+              <text x="-76" y="-3" font-size="16">🚪</text>
+              <text x="-52" y="-5" fill="#38bdf8" font-size="10.5" font-weight="800">Ingress :80 &amp; DNS :53</text>
+              <text x="-52" y="8" fill="#cbd5e1" font-size="8">CoreDNS &bull; Nginx Proxy</text>
+              <text x="-52" y="19" fill="#64748b" font-size="7.5" font-family="monospace">*.homelab &bull; *.fa.local</text>
+            </g>
+
+            <!-- 1. CENTER HUB: PAP CENTRAL API GATEWAY -->
+            <g id="node-core" class="topo-node" transform="translate(510, 240)">
+              <circle r="65" fill="#1e3a8a" opacity="0.3" filter="url(#glowCore)"/>
+              <circle r="52" fill="url(#coreGrad)" stroke="#60a5fa" stroke-width="3"/>
+              <text y="-14" text-anchor="middle" font-size="22">🛡️</text>
+              <text y="8" text-anchor="middle" fill="#ffffff" font-size="12" font-weight="800">PAP CORE API</text>
+              <text y="24" text-anchor="middle" fill="#93c5fd" font-size="9" font-family="monospace">192.168.25.101:8000</text>
+              <text y="37" text-anchor="middle" fill="#34d399" font-size="8" font-weight="700">● CENTRAL ENGINE</text>
+            </g>
+
+            <!-- 2. ESP32 ETERNAL (HARDWARE) -->
+            <g id="node-esp32" class="topo-node" transform="translate(145, 110)">
+              <rect x="-82.5" y="-33" width="165" height="66" rx="10" fill="url(#nodeGrad)" stroke="#38bdf8" stroke-width="2"/>
+              <text x="-68" y="-10" font-size="18">📟</text>
+              <text x="-43" y="-10" fill="#38bdf8" font-size="11" font-weight="800">ESP32 Eternal</text>
+              <text x="-43" y="4" fill="#cbd5e1" font-size="8.5">RC522 &bull; DHT11 &bull; Buzzer</text>
+              <text x="-43" y="18" fill="#64748b" font-size="8" font-family="monospace">192.168.25.104</text>
+            </g>
+
+            <!-- 3. HEATPRESS HUB WEB -->
+            <g id="node-hub" class="topo-node" transform="translate(145, 240)">
+              <rect x="-82.5" y="-33" width="165" height="66" rx="10" fill="url(#nodeGrad)" stroke="#34d399" stroke-width="2"/>
+              <text x="-68" y="-10" font-size="18">🖥️</text>
+              <text x="-43" y="-10" fill="#34d399" font-size="11" font-weight="800">HeatpressHub Web</text>
+              <text x="-43" y="4" fill="#cbd5e1" font-size="8.5">Fleet &amp; NFC Roles UI</text>
+              <text x="-43" y="18" fill="#64748b" font-size="8" font-family="monospace">Port :8088 / :80</text>
+            </g>
+
+            <!-- 4. STOCK UMKM -->
+            <g id="node-stock" class="topo-node" transform="translate(150, 390)">
+              <rect x="-82.5" y="-33" width="165" height="66" rx="10" fill="url(#nodeGrad)" stroke="#fbbf24" stroke-width="2"/>
+              <text x="-68" y="-10" font-size="18">💼</text>
+              <text x="-43" y="-10" fill="#fbbf24" font-size="11" font-weight="800">Stock UMKM POS</text>
+              <text x="-43" y="4" fill="#cbd5e1" font-size="8.5">Kasir &amp; Inventori</text>
+              <text x="-43" y="18" fill="#64748b" font-size="8" font-family="monospace">DB: stock_umkm</text>
+            </g>
+
+            <!-- 5. PSM CONTROL PLANE -->
+            <g id="node-psm" class="topo-node" transform="translate(870, 110)">
+              <rect x="-82.5" y="-33" width="165" height="66" rx="10" fill="url(#nodeGrad)" stroke="#a78bfa" stroke-width="2"/>
+              <text x="-68" y="-10" font-size="18">🎛️</text>
+              <text x="-43" y="-10" fill="#a78bfa" font-size="11" font-weight="800">PSM Console</text>
+              <text x="-43" y="4" fill="#cbd5e1" font-size="8.5">Server &amp; Deployments</text>
+              <text x="-43" y="18" fill="#64748b" font-size="8" font-family="monospace">Port :3005</text>
+            </g>
+
+            <!-- 6. MOSQUITTO MQTT -->
+            <g id="node-mqtt" class="topo-node" transform="translate(870, 220)">
+              <rect x="-82.5" y="-28" width="165" height="56" rx="10" fill="url(#nodeGrad)" stroke="#60a5fa" stroke-width="2"/>
+              <text x="-68" y="-7" font-size="17">📡</text>
+              <text x="-43" y="-7" fill="#60a5fa" font-size="10.5" font-weight="800">Mosquitto MQTT</text>
+              <text x="-43" y="6" fill="#cbd5e1" font-size="8">Broker SysCtrl &amp; IoT</text>
+              <text x="-43" y="17" fill="#64748b" font-size="7.5" font-family="monospace">Port :1883</text>
+            </g>
+
+            <!-- 7. INFLUXDB 2.7 TSDB -->
+            <g id="node-influx" class="topo-node" transform="translate(870, 325)">
+              <rect x="-82.5" y="-28" width="165" height="56" rx="10" fill="url(#nodeGrad)" stroke="#c084fc" stroke-width="2"/>
+              <text x="-68" y="-7" font-size="17">⚡</text>
+              <text x="-43" y="-7" fill="#c084fc" font-size="10.5" font-weight="800">InfluxDB 2.7 TSDB</text>
+              <text x="-43" y="6" fill="#cbd5e1" font-size="8">eternal_telemetry</text>
+              <text x="-43" y="17" fill="#64748b" font-size="7.5" font-family="monospace">Port :8086</text>
+            </g>
+
+            <!-- 8. GRAFANA UTAMA -->
+            <g id="node-grafana" class="topo-node" transform="translate(850, 435)">
+              <rect x="-82.5" y="-30" width="165" height="60" rx="10" fill="url(#nodeGrad)" stroke="#f43f5e" stroke-width="2"/>
+              <text x="-68" y="-9" font-size="17">📊</text>
+              <text x="-43" y="-9" fill="#f43f5e" font-size="10.5" font-weight="800">Grafana Utama</text>
+              <text x="-43" y="4" fill="#cbd5e1" font-size="8">Mixed: InfluxDB + MySQL</text>
+              <text x="-43" y="16" fill="#64748b" font-size="7.5" font-family="monospace">Port :3001</text>
+            </g>
+
+            <!-- 9. MYSQL 8.4 SERVER -->
+            <g id="node-mysql" class="topo-node" transform="translate(370, 435)">
+              <rect x="-72.5" y="-28" width="145" height="56" rx="8" fill="url(#nodeGrad)" stroke="#f59e0b" stroke-width="1.8"/>
+              <text x="-60" y="-7" font-size="15">🐬</text>
+              <text x="-37" y="-7" fill="#fbbf24" font-size="10" font-weight="800">MySQL 8.4</text>
+              <text x="-37" y="6" fill="#cbd5e1" font-size="7.5">eternal_db &bull; stock_umkm</text>
+              <text x="-37" y="17" fill="#64748b" font-size="7.5" font-family="monospace">Port :3306</text>
+            </g>
+
+            <!-- 10. POSTGRESQL SERVER -->
+            <g id="node-postgres" class="topo-node" transform="translate(650, 435)">
+              <rect x="-72.5" y="-28" width="145" height="56" rx="8" fill="url(#nodeGrad)" stroke="#38bdf8" stroke-width="1.8"/>
+              <text x="-60" y="-7" font-size="15">🐘</text>
+              <text x="-37" y="-7" fill="#38bdf8" font-size="10" font-weight="800">PostgreSQL</text>
+              <text x="-37" y="6" fill="#cbd5e1" font-size="7.5">pap_core &bull; psm</text>
+              <text x="-37" y="17" fill="#64748b" font-size="7.5" font-family="monospace">Port :5432</text>
+            </g>
+
+          </svg>
+        </div>
+
+        <!-- SIMULATION ACTION BUTTONS -->
+        <div style="margin-top: 1rem;">
+          <div style="font-size: 0.8rem; font-weight: 700; color: #cbd5e1; margin-bottom: 0.5rem;">
+            🕹️ Uji Coba Komunikasi Antar-Proyek (Klik Tombol untuk Memicu Paket Data Real-Time):
+          </div>
+          <div class="sim-controls-panel">
+            <button class="sim-btn sim-btn-emerald" onclick="simulateNfcTap()">
+              <span>🟢</span> <b>Tap Kartu NFC (ESP32)</b>
+            </button>
+            <button class="sim-btn sim-btn-cyan" onclick="simulateTelemetryPing()">
+              <span>🔵</span> <b>DHT11 Telemetri -> InfluxDB</b>
+            </button>
+            <button class="sim-btn sim-btn-purple" onclick="simulateNfcSync()">
+              <span>🟣</span> <b>Daftar User -> Sync NVS</b>
+            </button>
+            <button class="sim-btn sim-btn-emerald" style="background: rgba(6,182,212,0.15); color: #22d3ee; border: 1px solid rgba(6,182,212,0.3);" onclick="simulateDnsIngress()">
+              <span>🌐</span> <b>Ingress :80 &amp; CoreDNS :53</b>
+            </button>
+            <button class="sim-btn sim-btn-amber" onclick="simulateStockTransaction()">
+              <span>🟡</span> <b>Transaksi Stock UMKM</b>
+            </button>
+            <button class="sim-btn sim-btn-purple" onclick="simulatePsmDeploy()">
+              <span>🎛️</span> <b>Deploy Proyek PSM</b>
+            </button>
+            <button class="sim-btn sim-btn-rose" onclick="simulateBackupTrigger()">
+              <span>🔴</span> <b>Trigger Backup Snapshot</b>
+            </button>
+            <button class="sim-btn" style="background: #334155; color: #fff;" onclick="clearTerminalLogs()">
+              <span>🧹</span> Bersihkan Log
+            </button>
+          </div>
+        </div>
+
+      </div>
+
+    </div>
+
+    <!-- TAB 2: OVERVIEW -->
+    <div id="tab-overview" class="tab-content">
+      <div class="grid-4">
+        <div class="card">
+          <div class="card-desc">Central API Core</div>
+          <div class="card-stat" style="color: #60a5fa;">:8000</div>
+          <div class="card-desc">PAP + PSM + IoT Unified</div>
+        </div>
+        <div class="card">
+          <div class="card-desc">Total Arsip Backup</div>
+          <div class="card-stat" id="stat-backup-count">0</div>
+          <div class="card-desc" id="stat-backup-size">0 MB terpakai</div>
+        </div>
+        <div class="card">
+          <div class="card-desc">Armada Heatpress IoT</div>
+          <div class="card-stat" style="color: #34d399;">3 Mesin</div>
+          <div class="card-desc">HPM 55, AF-450, APM-LOGO</div>
+        </div>
+        <div class="card">
+          <div class="card-desc">Database PostgreSQL &amp; MySQL</div>
+          <div class="card-stat" style="color: #a78bfa;">4 DB Mandiri</div>
+          <div class="card-desc">eternal_db, stock_umkm, pap_core, psm</div>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-title">
+            <span>Kondisi Layanan Homelab</span>
+            <span class="badge badge-success">Zero Duplication</span>
+          </div>
+          <ul class="status-list">
+            <li class="status-item">
+              <span class="status-name">🛡️ Central API Gateway (pap-api)</span>
+              <span class="badge badge-success">Port 8000 • Healthy</span>
+            </li>
+            <li class="status-item">
+              <span class="status-name">⚙️ Decoupled Background Worker (pap-worker)</span>
+              <span class="badge badge-success" id="worker-status-badge">Worker Active • Decoupled</span>
+            </li>
+            <li class="status-item">
+              <span class="status-name">⚙️ PSM Control Plane Engine</span>
+              <span class="badge badge-success">Unified in PAP</span>
+            </li>
+            <li class="status-item">
+              <span class="status-name">🖥️ PSM Web Console</span>
+              <span class="badge badge-info">Port 3005 • Active</span>
+            </li>
+            <li class="status-item">
+              <span class="status-name">📟 IoT Heatpress Telemetry &amp; Web</span>
+              <span class="badge badge-success">Port 8088 / 9273</span>
+            </li>
+            <li class="status-item">
+              <span class="status-name">🗄️ PostgreSQL Server (psm, pap_core)</span>
+              <span class="badge badge-success">Port 5432 • Host</span>
+            </li>
+            <li class="status-item">
+              <span class="status-name">🐬 MySQL Server (eternal_db, stock_umkm)</span>
+              <span class="badge badge-success">Port 3306 • Host</span>
+            </li>
+            <li class="status-item">
+              <span class="status-name">📡 Mosquitto MQTT Broker</span>
+              <span class="badge badge-info">Port 1883 • Host</span>
+            </li>
+            <li class="status-item">
+              <span class="status-name">📈 Prometheus &amp; Grafana Monitoring</span>
+              <span class="badge badge-info">Port 9001 / 3001</span>
+            </li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <div class="card-title">
+            <span>Aksi Cepat &amp; Disaster Recovery</span>
+          </div>
+          <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 1.25rem; line-height: 1.5;">
+            Sistem Homelab kini menggunakan arsitektur <b>1 Central API Gateway (PAP Core)</b> yang menyatukan PSM Control Plane, IoT Device Mapping, dan Layanan Backup Terpadu. Tidak ada kontainer database atau broker duplikat yang membebani memori server fa.
+          </p>
+          <div style="display: flex; flex-direction: column; gap: 0.75rem;">
+            <button class="btn btn-primary" onclick="openCreateBackupModal()">💾 Buat Backup Sistem Sekarang</button>
+            <button class="btn" style="background: #334155; color: #fff;" onclick="syncIotTelemetry()">🔄 Sinkronisasi Telemetri IoT</button>
+            <a href="/docs" target="_blank" class="btn" style="background: #1e293b; color: #60a5fa; border: 1px solid var(--border-color);">📖 Buka Dokumentasi Swagger API</a>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 3: BACKUPS -->
+    <div id="tab-backups" class="tab-content">
+      <div class="card" style="margin-bottom: 1.5rem;">
+        <div class="card-title">
+          <span>Manajemen Backup &amp; Disaster Recovery</span>
+          <button class="btn btn-primary" onclick="openCreateBackupModal()">➕ Buat Backup Baru</button>
+        </div>
+        <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 1rem;">
+          Mencadangkan seluruh database terpadu (PostgreSQL <code>psm</code>, <code>pap_core</code>; MySQL <code>eternal_db</code>, <code>stock_umkm</code>; InfluxDB <code>eternal_telemetry</code>) serta konfigurasi jaringan &amp; layanan (CoreDNS, Nginx Ingress Router, Prometheus, Mosquitto, Telegraf, Docker Compose, .env) ke dalam arsip terkompresi <code>.tar.gz</code> dengan verifikasi integritas checksum SHA-256 otomatis.
+        </p>
+
+        <div id="backup-alert" style="display: none; padding: 0.75rem; border-radius: 6px; margin-bottom: 1rem; font-size: 0.85rem;"></div>
+
+        <div class="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>Nama File Arsip</th>
+                <th>Lingkup (Scope)</th>
+                <th>Ukuran</th>
+                <th>Waktu Dibuat</th>
+                <th>Status Database</th>
+                <th>Aksi</th>
+              </tr>
+            </thead>
+            <tbody id="backup-table-body">
+              <tr>
+                <td colspan="6" style="text-align: center; color: var(--text-muted); padding: 2rem;">Memuat daftar arsip backup...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 4: IOT FLEET & NFC -->
+    <div id="tab-iot" class="tab-content">
+      <div class="card" style="margin-bottom: 1.5rem;">
+        <div class="card-title">
+          <span>Armada Heatpress Machine IoT &amp; Eternal Smart Lock</span>
+          <div style="display: flex; gap: 0.5rem;">
+            <a href="http://192.168.25.101:8088" target="_blank" class="btn btn-sm btn-primary">📟 Buka HeatpressHub Web</a>
+            <button class="btn btn-sm" style="background: #334155; color: #fff;" onclick="syncIotTelemetry()">🔄 Sinkronkan Telemetri</button>
+          </div>
+        </div>
+        <div class="grid-3" id="iot-cards-container">
+          <!-- Eternal ESP32 -->
+          <div class="card" style="background-color: #0b1426; border: 1px solid #1e3a8a;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+              <span style="font-weight: 800; font-size: 1.1rem; color: #38bdf8;">Eternal ESP32</span>
+              <span class="badge badge-success">Online (Buzzer KY-012)</span>
+            </div>
+            <div style="font-family: monospace; font-size: 0.75rem; color: var(--text-muted); margin-bottom: 0.75rem;">88:57:21:8E:59:54 (192.168.25.104)</div>
+            <div style="font-size: 0.85rem; display: flex; flex-direction: column; gap: 0.35rem;">
+              <div>Fungsi: <b>NFC Toggle Lock, Solenoid Relay, DHT11</b></div>
+              <div>Database: <code>MySQL eternal_db (:3306)</code></div>
+              <div>Topik: <code>/SysCtrl, /Eternal/#</code></div>
+            </div>
+          </div>
+          <!-- HPM 55 -->
+          <div class="card" style="background-color: #0b1426; border: 1px solid #374151;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+              <span style="font-weight: 700; font-size: 1.1rem; color: #60a5fa;">HPM 55</span>
+              <span class="badge badge-success">Online</span>
+            </div>
+            <div style="font-family: monospace; font-size: 0.75rem; color: var(--text-muted); margin-bottom: 0.75rem;">7C:87:CE:2D:B3:7C</div>
+            <div style="font-size: 0.85rem; display: flex; flex-direction: column; gap: 0.35rem;">
+              <div>Lokasi: <b>Workshop Heatpress #1</b></div>
+              <div>Topik MQTT: <code>heatpress/telemetry/7C87CE2DB37C</code></div>
+            </div>
+          </div>
+          <!-- AF-450 -->
+          <div class="card" style="background-color: #0b1426; border: 1px solid #374151;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+              <span style="font-weight: 700; font-size: 1.1rem; color: #34d399;">AF-450</span>
+              <span class="badge badge-success">Online</span>
+            </div>
+            <div style="font-family: monospace; font-size: 0.75rem; color: var(--text-muted); margin-bottom: 0.75rem;">3C:E9:0E:85:2F:A0</div>
+            <div style="font-size: 0.85rem; display: flex; flex-direction: column; gap: 0.35rem;">
+              <div>Lokasi: <b>Lini Produksi A</b></div>
+              <div>Topik MQTT: <code>heatpress/telemetry/3CE90E852FA0</code></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 5: LOCAL DNS & VIRTUAL HOSTS -->
+    <div id="tab-dns" class="tab-content">
+      <div class="grid-4" style="margin-bottom: 1.25rem;">
+        <div class="card">
+          <div class="card-desc">DNS Server Lokal</div>
+          <div class="card-stat" style="color: #34d399;">:53</div>
+          <div class="card-desc" id="dns-status-badge">CoreDNS Active</div>
+        </div>
+        <div class="card">
+          <div class="card-desc">Ingress Gateway</div>
+          <div class="card-stat" style="color: #60a5fa;">:80</div>
+          <div class="card-desc">Virtual Host Nginx Router</div>
+        </div>
+        <div class="card">
+          <div class="card-desc">Domain Zone Utama</div>
+          <div class="card-stat" style="color: #a78bfa; font-size: 1.35rem;">*.homelab</div>
+          <div class="card-desc">dan *.fa.local</div>
+        </div>
+        <div class="card">
+          <div class="card-desc">Total Domain Terdaftar</div>
+          <div class="card-stat" id="stat-dns-count" style="color: #f59e0b;">0</div>
+          <div class="card-desc">Rute Virtual Host Aktif</div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-bottom: 1.5rem;">
+        <div class="card-title">
+          <span>Daftar Domain Lokal Homelab (Tanpa Nomor Port)</span>
+          <div style="display: flex; gap: 0.5rem;">
+            <a href="/api/v1/dns/hosts-file" target="_blank" class="btn btn-sm" style="background: #334155; color: #fff;">📋 Unduh hosts.txt</a>
+            <button class="btn btn-primary btn-sm" onclick="openAddDomainModal()">➕ Tambah Rute Domain</button>
+          </div>
+        </div>
+        <div id="dns-alert" style="display: none; padding: 0.75rem; border-radius: 6px; margin-bottom: 1rem; font-size: 0.85rem;"></div>
+
+        <div class="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>Domain Lokal</th>
+                <th>Kategori</th>
+                <th>Target Kontainer / Port</th>
+                <th>Deskripsi</th>
+                <th>Aksi</th>
+              </tr>
+            </thead>
+            <tbody id="dns-table-body">
+              <tr>
+                <td colspan="5" style="text-align: center; color: var(--text-muted); padding: 2rem;">Memuat daftar domain lokal...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 6: LAYANAN & KONTAINER -->
+    <div id="tab-containers" class="tab-content">
+      <div class="card">
+        <div class="card-title">
+          <span>Topologi Layanan Docker &amp; Server Host</span>
+        </div>
+        <div class="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>Nama Layanan</th>
+                <th>Port Publik</th>
+                <th>Deskripsi Fungsi</th>
+                <th>Status Tipe</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><b>homelab-dns</b></td>
+                <td><code style="color: #38bdf8;">53 (UDP/TCP)</code></td>
+                <td>CoreDNS Resolver Domain Lokal (*.homelab &amp; *.fa.local)</td>
+                <td>DNS Server</td>
+              </tr>
+              <tr>
+                <td><b>homelab-router</b></td>
+                <td><code style="color: #38bdf8;">80 (HTTP)</code></td>
+                <td>Nginx Reverse Proxy &amp; Virtual Host Router</td>
+                <td>Ingress Gateway</td>
+              </tr>
+              <tr>
+                <td><b>pap-api</b></td>
+                <td><code style="color: #34d399;">8000 (HTTP)</code></td>
+                <td>Central Core API &bull; PSM Engine &bull; Ingress &amp; Traffic Gateway</td>
+                <td>Core API Gateway</td>
+              </tr>
+              <tr>
+                <td><b>pap-worker</b></td>
+                <td><code style="color: #38bdf8;">Daemon (Isolated)</code></td>
+                <td>Decoupled Background Engine &bull; MQTT Influx Consumer &bull; Auto-Backup Scheduler &bull; IoT Fleet Watchdog</td>
+                <td><span class="badge badge-success">Background Worker (Decoupled)</span></td>
+              </tr>
+              <tr>
+                <td><b>psm-web</b></td>
+                <td><code style="color: #a78bfa;">3005</code></td>
+                <td>Personal Server Manager Web GUI</td>
+                <td>Frontend Console</td>
+              </tr>
+              <tr>
+                <td><b>iot_dashboard_web</b></td>
+                <td><code style="color: #34d399;">8088</code></td>
+                <td>Heatpress Fleet Dashboard Nginx</td>
+                <td>IoT Web Portal</td>
+              </tr>
+              <tr>
+                <td><b>iot_telegraf</b></td>
+                <td><code style="color: #f59e0b;">9273</code></td>
+                <td>MQTT to Prometheus Metrics Exporter</td>
+                <td>Telemetry Bridge</td>
+              </tr>
+              <tr>
+                <td><b>grafana</b></td>
+                <td><code style="color: #f43f5e;">3001</code></td>
+                <td>Grafana Server Host (Visual Analytics)</td>
+                <td>Visual Dashboard</td>
+              </tr>
+              <tr>
+                <td><b>prometheus</b></td>
+                <td><code style="color: #eab308;">9001</code></td>
+                <td>Prometheus Scrape Server</td>
+                <td>Metrics TSDB</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 7: API DOCS -->
+    <div id="tab-api" class="tab-content">
+      <div class="card">
+        <div class="card-title">
+          <span>Central API Gateway Routing Explorer</span>
+          <a href="/docs" target="_blank" class="btn btn-primary btn-sm">Buka Swagger UI</a>
+        </div>
+        <div class="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>Metode &amp; Path</th>
+                <th>Domain / Modul</th>
+                <th>Deskripsi</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code style="color: #34d399;">GET /</code></td>
+                <td>Management UI</td>
+                <td>Homelab Mission Control Dashboard (Halaman Ini)</td>
+              </tr>
+              <tr>
+                <td><code style="color: #34d399;">GET /health</code></td>
+                <td>System</td>
+                <td>Pemeriksaan kesehatan API Gateway utama</td>
+              </tr>
+              <tr>
+                <td><code style="color: #34d399;">GET /api/nfc/users</code></td>
+                <td>IoT Fleet</td>
+                <td>Daftar pengguna kartu NFC &amp; role whitelist</td>
+              </tr>
+              <tr>
+                <td><code style="color: #3b82f6;">POST /api/nfc/tap</code></td>
+                <td>IoT Fleet</td>
+                <td>Penerimaan event tap kartu NFC dari hardware / simulasi</td>
+              </tr>
+              <tr>
+                <td><code style="color: #34d399;">GET /api/devices/hierarchy</code></td>
+                <td>IoT Fleet</td>
+                <td>Hirarki perangkat Heatpress dan status online real-time</td>
+              </tr>
+              <tr>
+                <td><code style="color: #3b82f6;">POST /api/v1/backups/create</code></td>
+                <td>Disaster Recovery</td>
+                <td>Membuat cadangan seluruh database &amp; konfigurasi homelab</td>
+              </tr>
+              <tr>
+                <td><code style="color: #34d399;">GET /api/v1/backups</code></td>
+                <td>Disaster Recovery</td>
+                <td>Melihat daftar arsip backup yang tersedia</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- MODAL: BUAT BACKUP BARU -->
+  <div id="modal-create-backup" class="modal-backdrop">
+    <div class="modal-box">
+      <div class="modal-header">
+        <div class="modal-title">💾 Buat Backup Sistem Homelab</div>
+        <button class="modal-close" onclick="closeCreateBackupModal()">&times;</button>
+      </div>
+      <form onsubmit="handleCreateBackup(event)">
+        <div class="form-group">
+          <label class="form-label">Lingkup Cadangan (Backup Scope)</label>
+          <select id="backup-scope" class="form-control">
+            <option value="all">Full System (Semua Project: Database + Konfigurasi)</option>
+            <option value="databases">Hanya Database (PostgreSQL: psm, pap_core; MySQL: eternal_db, stock_umkm)</option>
+            <option value="configs">Hanya Konfigurasi (Docker Compose, Prometheus, Mosquitto, Telegraf, .env)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Catatan / Label (Opsional)</label>
+          <input type="text" id="backup-note" class="form-control" placeholder="Contoh: Backup Sebelum Update Skrip">
+        </div>
+        <div style="display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 1.5rem;">
+          <button type="button" class="btn" style="background: #334155; color: #fff;" onclick="closeCreateBackupModal()">Batal</button>
+          <button type="submit" id="btn-submit-backup" class="btn btn-primary">Mulai Cadangkan Sekarang</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- MODAL: TAMBAH DOMAIN LOKAL -->
+  <div id="modal-add-domain" class="modal-backdrop">
+    <div class="modal-box">
+      <div class="modal-header">
+        <div class="modal-title">🌐 Daftarkan Domain &amp; Virtual Host Baru</div>
+        <button class="modal-close" onclick="closeAddDomainModal()">&times;</button>
+      </div>
+      <form onsubmit="handleAddDomain(event)">
+        <div class="form-group">
+          <label class="form-label">Domain Lokal (Otomatis ditambahkan .homelab jika belum ada)</label>
+          <input type="text" id="domain-name" class="form-control" placeholder="contoh: pos-kasir.homelab" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Target Port Kontainer (Port Host)</label>
+          <input type="number" id="domain-port" class="form-control" placeholder="contoh: 3000" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Target Host (Default: host.docker.internal)</label>
+          <input type="text" id="domain-host" class="form-control" value="host.docker.internal">
+        </div>
+        <div style="display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 1.5rem;">
+          <button type="button" class="btn" style="background: #334155; color: #fff;" onclick="closeAddDomainModal()">Batal</button>
+          <button type="submit" id="btn-submit-domain" class="btn btn-primary">Simpan &amp; Terapkan</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- MODAL: DETAIL MANIFEST -->
+  <div id="modal-manifest" class="modal-backdrop">
+    <div class="modal-box" style="max-width: 700px;">
+      <div class="modal-header">
+        <div class="modal-title" id="manifest-modal-title">📋 Detail Manifest Arsip</div>
+        <button class="modal-close" onclick="closeManifestModal()">&times;</button>
+      </div>
+      <div id="manifest-content" class="code-preview">Memuat...</div>
+      <div style="display: flex; justify-content: flex-end; margin-top: 1.25rem;">
+        <button class="btn btn-primary" onclick="closeManifestModal()">Tutup</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: HASIL VERIFIKASI ARSIP -->
+  <div id="modal-verify" class="modal-backdrop">
+    <div class="modal-box" style="max-width: 750px;">
+      <div class="modal-header">
+        <div class="modal-title" id="verify-modal-title">🔍 Hasil Verifikasi Integritas Backup</div>
+        <button class="modal-close" onclick="closeVerifyModal()">&times;</button>
+      </div>
+      <div id="verify-modal-body" style="font-size: 0.9rem;">
+        Memverifikasi arsip...
+      </div>
+      <div style="display: flex; justify-content: flex-end; margin-top: 1.25rem;">
+        <button class="btn btn-primary" onclick="closeVerifyModal()">Tutup</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- FOOTER -->
+  <footer>
+    Homelab Server fa &bull; Unified Core API Gateway (:8000) &bull; Zero Duplication Architecture &copy; 2026
+  </footer>
+
+  <script>
+    // ═════════════════════════════════════════════════════════════════════════
+    // TAB NAVIGATION
+    // ═════════════════════════════════════════════════════════════════════════
+    function switchTab(tabId) {
+      document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+      document.querySelectorAll('.nav-tab').forEach(el => el.classList.remove('active'));
+      const target = document.getElementById(tabId);
+      if (target) target.classList.add('active');
+      const tabs = Array.from(document.querySelectorAll('.nav-tab'));
+      const tabIds = ['tab-topology', 'tab-overview', 'tab-backups', 'tab-iot', 'tab-dns', 'tab-containers', 'tab-api'];
+      const activeIdx = tabIds.indexOf(tabId);
+      if (activeIdx >= 0 && tabs[activeIdx]) tabs[activeIdx].classList.add('active');
+
+      if (tabId === 'tab-backups') loadBackups();
+      if (tabId === 'tab-dns') loadDnsRecords();
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // HIGH-PRECISION REALTIME TOPOLOGY & PARTICLE ENGINE (60-120 FPS BUTTERY SMOOTH)
+    // ═════════════════════════════════════════════════════════════════════════
+    const canvas = document.getElementById('topology-canvas');
+    const ctx = canvas ? canvas.getContext('2d') : null;
+    let particles = [];
+    let ripples = [];
+    let autoSimInterval = null;
+    let packetCount = 0;
+    let isLiveStreamActive = true;
+    let trafficSocket = null;
+    let sseSource = null;
+    let lastFrameTime = performance.now();
+
+    // Node coordinate map matching the exact SVG viewBox (1020 x 500)
+    const NODES = {
+      router:   { x: 510, y: 52,  label: "Ingress :80 & DNS :53", elId: "node-router" },
+      core:     { x: 510, y: 240, label: "Core API :8000", elId: "node-core" },
+      esp32:    { x: 145, y: 110, label: "ESP32 Eternal", elId: "node-esp32" },
+      hub:      { x: 145, y: 240, label: "HeatpressHub Web", elId: "node-hub" },
+      stock:    { x: 150, y: 390, label: "Stock UMKM POS", elId: "node-stock" },
+      psm:      { x: 870, y: 110, label: "PSM Console", elId: "node-psm" },
+      mqtt:     { x: 870, y: 220, label: "Mosquitto :1883", elId: "node-mqtt" },
+      influxdb: { x: 870, y: 325, label: "InfluxDB :8086", elId: "node-influx" },
+      grafana:  { x: 850, y: 435, label: "Grafana :3001", elId: "node-grafana" },
+      mysql:    { x: 370, y: 435, label: "MySQL :3306", elId: "node-mysql" },
+      postgres: { x: 650, y: 435, label: "PostgreSQL :5432", elId: "node-postgres" }
+    };
+
+    // Exact Quadratic Bezier Control Points matching the SVG dashed paths
+    const CABLE_ROUTES = {
+      // Router & Ingress
+      "router-core":    { p0: NODES.router, cp: { x: 510, y: 146 }, p1: NODES.core },
+      "core-router":    { p0: NODES.core, cp: { x: 510, y: 146 }, p1: NODES.router },
+      "router-hub":     { p0: NODES.router, cp: { x: 260, y: 52 }, p1: NODES.hub },
+      "hub-router":     { p0: NODES.hub, cp: { x: 260, y: 52 }, p1: NODES.router },
+      "router-psm":     { p0: NODES.router, cp: { x: 740, y: 52 }, p1: NODES.psm },
+      "psm-router":     { p0: NODES.psm, cp: { x: 740, y: 52 }, p1: NODES.router },
+      "router-grafana": { p0: NODES.router, cp: { x: 780, y: 180 }, p1: NODES.grafana },
+
+      // Core to Hardware & Clients
+      "core-esp32":     { p0: NODES.core, cp: { x: 310, y: 130 }, p1: NODES.esp32 },
+      "esp32-core":     { p0: NODES.esp32, cp: { x: 310, y: 130 }, p1: NODES.core },
+      "core-hub":       { p0: NODES.core, cp: { x: 327, y: 240 }, p1: NODES.hub },
+      "hub-core":       { p0: NODES.hub, cp: { x: 327, y: 240 }, p1: NODES.core },
+      "core-stock":     { p0: NODES.core, cp: { x: 310, y: 340 }, p1: NODES.stock },
+      "stock-core":     { p0: NODES.stock, cp: { x: 310, y: 340 }, p1: NODES.core },
+      "core-psm":       { p0: NODES.core, cp: { x: 710, y: 130 }, p1: NODES.psm },
+      "psm-core":       { p0: NODES.psm, cp: { x: 710, y: 130 }, p1: NODES.core },
+
+      // Core to Pipelines
+      "core-mqtt":      { p0: NODES.core, cp: { x: 700, y: 230 }, p1: NODES.mqtt },
+      "mqtt-core":      { p0: NODES.mqtt, cp: { x: 700, y: 230 }, p1: NODES.core },
+      "core-influxdb":  { p0: NODES.core, cp: { x: 700, y: 290 }, p1: NODES.influxdb },
+      "influxdb-core":  { p0: NODES.influxdb, cp: { x: 700, y: 290 }, p1: NODES.core },
+      "core-grafana":   { p0: NODES.core, cp: { x: 690, y: 360 }, p1: NODES.grafana },
+      "grafana-core":   { p0: NODES.grafana, cp: { x: 690, y: 360 }, p1: NODES.core },
+
+      // Core to Databases
+      "core-mysql":     { p0: NODES.core, cp: { x: 430, y: 370 }, p1: NODES.mysql },
+      "mysql-core":     { p0: NODES.mysql, cp: { x: 430, y: 370 }, p1: NODES.core },
+      "core-postgres":  { p0: NODES.core, cp: { x: 590, y: 370 }, p1: NODES.postgres },
+      "postgres-core":  { p0: NODES.postgres, cp: { x: 590, y: 370 }, p1: NODES.core },
+
+      // Cross routes & Direct Pipelines
+      "esp32-mqtt":     { p0: NODES.esp32, cp: { x: 510, y: 90 }, p1: NODES.mqtt },
+      "mqtt-esp32":     { p0: NODES.mqtt, cp: { x: 510, y: 90 }, p1: NODES.esp32 },
+      "mqtt-influxdb":  { p0: NODES.mqtt, cp: { x: 870, y: 272 }, p1: NODES.influxdb },
+      "influxdb-mqtt":  { p0: NODES.influxdb, cp: { x: 870, y: 272 }, p1: NODES.mqtt },
+      "influxdb-grafana":{ p0: NODES.influxdb, cp: { x: 860, y: 380 }, p1: NODES.grafana },
+      "grafana-influxdb":{ p0: NODES.grafana, cp: { x: 860, y: 380 }, p1: NODES.influxdb },
+      "mysql-grafana":  { p0: NODES.mysql, cp: { x: 640, y: 485 }, p1: NODES.grafana },
+      "mysql-stock":    { p0: NODES.mysql, cp: { x: 260, y: 440 }, p1: NODES.stock },
+      "postgres-psm":   { p0: NODES.postgres, cp: { x: 770, y: 270 }, p1: NODES.psm }
+    };
+
+    function resizeCanvas() {
+      if (!canvas) return;
+      const rect = canvas.getBoundingClientRect();
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      canvas.width = rect.width * dpr;
+      canvas.height = rect.height * dpr;
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.scale(dpr, dpr);
+    }
+
+    function getBezierPoint(route, t) {
+      const inv = 1 - t;
+      const x = inv * inv * route.p0.x + 2 * inv * t * route.cp.x + t * t * route.p1.x;
+      const y = inv * inv * route.p0.y + 2 * inv * t * route.cp.y + t * t * route.p1.y;
+      return { x, y };
+    }
+
+    class DataParticle {
+      constructor(route, color, label, speed = 1.15, onComplete = null) {
+        this.route = route;
+        this.color = color;
+        this.label = label;
+        this.progress = 0;
+        this.speed = speed; // progress percentage per second (1.2 = ~0.83s travel time)
+        this.onComplete = onComplete;
+      }
+
+      update(dt) {
+        this.progress += this.speed * dt;
+        if (this.progress >= 1) {
+          this.progress = 1;
+          if (this.onComplete) {
+            this.onComplete();
+            this.onComplete = null;
+          }
+          return false;
+        }
+        return true;
+      }
+
+      draw(c, scaleX, scaleY) {
+        const curPt = getBezierPoint(this.route, this.progress);
+        const curX = curPt.x * scaleX;
+        const curY = curPt.y * scaleY;
+
+        // 1. Smooth Comet Tail along the exact curved cable line
+        const segments = 10;
+        const tailLength = 0.14;
+        for (let i = segments; i >= 1; i--) {
+          const pastT = Math.max(0, this.progress - (i / segments) * tailLength);
+          const p1 = getBezierPoint(this.route, pastT);
+          const nextT = Math.max(0, this.progress - ((i - 1) / segments) * tailLength);
+          const p2 = getBezierPoint(this.route, nextT);
+
+          const ratio = 1 - (i / segments);
+          c.save();
+          c.strokeStyle = this.color;
+          c.globalAlpha = ratio * 0.75;
+          c.lineWidth = 1 + ratio * 4.5;
+          c.lineCap = 'round';
+          c.beginPath();
+          c.moveTo(p1.x * scaleX, p1.y * scaleY);
+          c.lineTo(p2.x * scaleX, p2.y * scaleY);
+          c.stroke();
+          c.restore();
+        }
+
+        // 2. Glowing Halo
+        c.save();
+        c.globalAlpha = 0.35;
+        c.fillStyle = this.color;
+        c.beginPath();
+        c.arc(curX, curY, 9, 0, Math.PI * 2);
+        c.fill();
+
+        // 3. Crisp Particle Core
+        c.globalAlpha = 1.0;
+        c.fillStyle = '#ffffff';
+        c.beginPath();
+        c.arc(curX, curY, 4, 0, Math.PI * 2);
+        c.fill();
+        c.restore();
+
+        // 4. Floating Badge (Method / Status)
+        if (this.label) {
+          c.save();
+          c.font = '700 9px ui-monospace, SFMono-Regular, Menlo, Monaco, monospace';
+          const textWidth = c.measureText(this.label).width;
+          const bW = textWidth + 8;
+          const bH = 13;
+          const bX = curX - bW / 2;
+          const bY = curY - 16;
+
+          c.fillStyle = 'rgba(7, 11, 20, 0.90)';
+          c.strokeStyle = this.color;
+          c.lineWidth = 1;
+          c.beginPath();
+          c.roundRect(bX, bY, bW, bH, 3);
+          c.fill();
+          c.stroke();
+
+          c.fillStyle = '#ffffff';
+          c.fillText(this.label, bX + 4, bY + 10);
+          c.restore();
+        }
+      }
+    }
+
+    class Ripple {
+      constructor(pt, color) {
+        this.pt = pt;
+        this.color = color;
+        this.elapsed = 0;
+        this.duration = 0.45;
+      }
+      update(dt) {
+        this.elapsed += dt;
+        return this.elapsed < this.duration;
+      }
+      draw(c, scaleX, scaleY) {
+        const t = this.elapsed / this.duration;
+        const r = 8 + (34 - 8) * t;
+        c.save();
+        c.strokeStyle = this.color;
+        c.globalAlpha = (1 - t) * 0.85;
+        c.lineWidth = 2.5 * (1 - t);
+        c.beginPath();
+        c.arc(this.pt.x * scaleX, this.pt.y * scaleY, r, 0, Math.PI * 2);
+        c.stroke();
+        c.restore();
+      }
+    }
+
+    function triggerNodePulse(nodeKey, color) {
+      const node = NODES[nodeKey];
+      if (!node || !node.elId) return;
+      const el = document.getElementById(node.elId);
+      if (!el) return;
+      el.style.filter = `drop-shadow(0 0 22px ${color}) brightness(1.4)`;
+      setTimeout(() => {
+        el.style.filter = '';
+      }, 260);
+    }
+
+    function animateParticles(currentTime) {
+      if (!ctx || !canvas) return;
+      const dt = Math.min((currentTime - lastFrameTime) / 1000, 0.1);
+      lastFrameTime = currentTime;
+
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = rect.width / 1020;
+      const scaleY = rect.height / 500;
+
+      ctx.clearRect(0, 0, rect.width, rect.height);
+
+      // 1. Draw shockwave ripples
+      ripples = ripples.filter(r => {
+        const alive = r.update(dt);
+        if (alive) r.draw(ctx, scaleX, scaleY);
+        return alive;
+      });
+
+      // 2. Draw smooth particles
+      particles = particles.filter(p => {
+        const alive = p.update(dt);
+        p.draw(ctx, scaleX, scaleY);
+        return alive;
+      });
+
+      requestAnimationFrame(animateParticles);
+    }
+
+    function spawnPacket(fromKey, toKey, color, label, speed = 1.15, onArrive = null) {
+      const routeKey = `${fromKey}-${toKey}`;
+      let route = CABLE_ROUTES[routeKey];
+      if (!route) {
+        if (fromKey !== 'core' && toKey !== 'core') {
+          spawnPacket(fromKey, 'core', color, label, speed, () => {
+            spawnPacket('core', toKey, color, label, speed, onArrive);
+          });
+          return;
+        }
+        const fromNode = NODES[fromKey] || NODES.core;
+        const toNode = NODES[toKey] || NODES.core;
+        route = {
+          p0: fromNode,
+          cp: { x: (fromNode.x + toNode.x) / 2, y: (fromNode.y + toNode.y) / 2 },
+          p1: toNode
+        };
+      }
+
+      const p = new DataParticle(route, color, label, speed, () => {
+        ripples.push(new Ripple(route.p1, color));
+        triggerNodePulse(toKey, color);
+        if (onArrive) onArrive();
+      });
+      particles.push(p);
+    }
+
+    function logTerminal(tagClass, tagText, message) {
+      const stream = document.getElementById('terminal-stream');
+      if (!stream) return;
+      const now = new Date();
+      const timeStr = now.toTimeString().split(' ')[0] + '.' + String(now.getMilliseconds()).padStart(3, '0');
+      const row = document.createElement('div');
+      row.className = 'terminal-row';
+      row.innerHTML = `<span class="log-time">[${timeStr}]</span> <span class="${tagClass}">[${tagText}]</span> ${message}`;
+      stream.prepend(row);
+
+      // Keep maximum 80 rows
+      if (stream.children.length > 80) {
+        stream.removeChild(stream.lastChild);
+      }
+    }
+
+    function clearTerminalLogs() {
+      const stream = document.getElementById('terminal-stream');
+      if (stream) stream.innerHTML = '<div class="terminal-row"><span class="log-time">[CLEARED]</span> Log dibersihkan. Menunggu lalu lintas data baru...</div>';
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // REALTIME LIVE STREAM (WEBSOCKET + SSE FALLBACK)
+    // ═════════════════════════════════════════════════════════════════════════
+
+    function updateStreamBadge(connected, text) {
+      const pill = document.getElementById('stream-status-pill');
+      const textEl = document.getElementById('stream-status-text');
+      if (!pill || !textEl) return;
+      if (connected) {
+        pill.className = 'stream-pill';
+        textEl.innerText = text || '🔴 LIVE REALTIME API STREAM';
+      } else {
+        pill.className = 'stream-pill disconnected';
+        textEl.innerText = text || '⚠️ STREAM OFFLINE';
+      }
+    }
+
+    function setLiveMode(live) {
+      isLiveStreamActive = live;
+      const btnLive = document.getElementById('btn-mode-live');
+      const btnSim = document.getElementById('btn-mode-sim');
+      const btnAuto = document.getElementById('btn-toggle-auto');
+      const label = document.getElementById('active-mode-label');
+
+      if (live) {
+        btnLive.classList.add('active');
+        btnSim.classList.remove('active');
+        if (btnAuto) btnAuto.style.display = 'none';
+        if (label) label.innerText = '🔴 Live Stream';
+        stopAutoSimulation();
+        connectRealtimeTraffic();
+      } else {
+        btnLive.classList.remove('active');
+        btnSim.classList.add('active');
+        if (btnAuto) btnAuto.style.display = 'inline-flex';
+        if (label) label.innerText = '🧪 Uji Manual';
+      }
+    }
+
+    function connectRealtimeTraffic() {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${protocol}//${window.location.host}/api/v1/traffic/ws`;
+
+      try {
+        if (trafficSocket) {
+          trafficSocket.close();
+          trafficSocket = null;
+        }
+        trafficSocket = new WebSocket(wsUrl);
+
+        trafficSocket.onopen = () => {
+          updateStreamBadge(true, '🔴 LIVE REALTIME API (WS)');
+          console.log('[TrafficWS] Connected to live API traffic stream');
+        };
+
+        trafficSocket.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            if (data.type === 'api_traffic') {
+              handleIncomingRealtimeTraffic(data);
+            }
+          } catch (e) {}
+        };
+
+        trafficSocket.onclose = () => {
+          updateStreamBadge(false, '🟡 RECONNECTING STREAM...');
+          setTimeout(connectSseFallback, 2500);
+        };
+
+        trafficSocket.onerror = () => {
+          if (trafficSocket) trafficSocket.close();
+        };
+      } catch (err) {
+        connectSseFallback();
+      }
+    }
+
+    function connectSseFallback() {
+      if (trafficSocket && trafficSocket.readyState === WebSocket.OPEN) return;
+      try {
+        if (sseSource) sseSource.close();
+        sseSource = new EventSource('/api/v1/traffic/stream');
+
+        sseSource.onopen = () => {
+          updateStreamBadge(true, '🔴 LIVE REALTIME API (SSE)');
+        };
+
+        sseSource.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            handleIncomingRealtimeTraffic(data);
+          } catch (e) {}
+        };
+
+        sseSource.onerror = () => {
+          updateStreamBadge(false, '⚠️ RETRYING STREAM...');
+        };
+      } catch (e) {}
+    }
+
+    function handleIncomingRealtimeTraffic(data) {
+      // Update real KPI counters
+      packetCount = data.total_requests || (packetCount + 1);
+      const countEl = document.getElementById('sim-packet-count');
+      if (countEl) countEl.innerText = packetCount.toLocaleString();
+
+      if (data.duration_ms || data.avg_latency_ms) {
+        const lat = data.duration_ms || data.avg_latency_ms;
+        const latEl = document.getElementById('sim-latency');
+        if (latEl) latEl.innerText = `${lat} ms`;
+      }
+
+      // Badge label for moving particle
+      const badgeLabel = `${data.method || 'GET'} ${data.status || 200}`;
+
+      // Spawn primary particle from source to target
+      spawnPacket(data.source || 'hub', data.target || 'core', data.color || '#3b82f6', badgeLabel, 1.25, () => {
+        // If sub-target exists (e.g. core -> mysql or core -> postgres or mqtt -> influxdb), trigger secondary hop!
+        if (data.sub_target && data.sub_target !== data.target) {
+          spawnPacket(data.target || 'core', data.sub_target, data.color || '#3b82f6', data.tag || 'DB_SYNC', 1.35, () => {
+            // If sub-target was influxdb, trigger downstream visual query to grafana
+            if (data.sub_target === 'influxdb') {
+              spawnPacket('influxdb', 'grafana', '#ec4899', 'FLUX_QUERY', 1.45);
+            }
+          });
+        }
+      });
+
+      // Log in terminal stream
+      logTerminal(`log-tag-${data.source || 'api'}`, data.tag || 'API_REAL', `${data.detail}`);
+    }
+
+    async function hydrateInitialTraffic() {
+      try {
+        const res = await fetch('/api/v1/traffic/recent');
+        const json = await res.json();
+        if (json.stats) {
+          packetCount = json.stats.total_requests || 0;
+          const countEl = document.getElementById('sim-packet-count');
+          if (countEl) countEl.innerText = packetCount.toLocaleString();
+
+          const latEl = document.getElementById('sim-latency');
+          if (latEl) latEl.innerText = `${json.stats.avg_latency_ms || 1.2} ms`;
+        }
+
+        // Hydrate initial log terminal with real history
+        if (json.data && json.data.length > 0) {
+          json.data.slice(-5).forEach(d => {
+            logTerminal(`log-tag-${d.source || 'api'}`, d.tag || 'HISTORY', `${d.detail}`);
+          });
+        }
+      } catch (e) {}
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // MANUAL ACTION BUTTONS (EXECUTES REAL API CALLS VIA BACKEND)
+    // ═════════════════════════════════════════════════════════════════════════
+
+    async function triggerSimAction(action) {
+      try {
+        await fetch('/api/v1/traffic/simulate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: action })
+        });
+      } catch (err) {
+        console.warn('Simulate fetch error:', err);
+      }
+    }
+
+    function simulateNfcTap() {
+      triggerSimAction('nfc_tap');
+    }
+
+    function simulateTelemetryPing() {
+      triggerSimAction('telemetry');
+    }
+
+    function simulateNfcSync() {
+      triggerSimAction('nfc_sync');
+    }
+
+    function simulateDnsIngress() {
+      triggerSimAction('dns_ingress');
+    }
+
+    function simulateStockTransaction() {
+      triggerSimAction('stock');
+    }
+
+    function simulatePsmDeploy() {
+      triggerSimAction('psm_deploy');
+    }
+
+    function simulateBackupTrigger() {
+      triggerSimAction('backup');
+    }
+
+    function toggleAutoSimulation() {
+      const btn = document.getElementById('btn-toggle-auto');
+      const text = document.getElementById('auto-status-indicator');
+      if (autoSimInterval) {
+        stopAutoSimulation();
+        btn.classList.remove('active');
+        text.innerText = '▶️ Auto Test Generator';
+      } else {
+        startAutoSimulation();
+        btn.classList.add('active');
+        text.innerText = '⏸️ Jeda Generator';
+      }
+    }
+
+    function startAutoSimulation() {
+      if (autoSimInterval) clearInterval(autoSimInterval);
+      autoSimInterval = setInterval(() => {
+        const actions = ['nfc_tap', 'telemetry', 'nfc_sync', 'dns_ingress', 'stock', 'psm_deploy'];
+        const chosen = actions[Math.floor(Math.random() * actions.length)];
+        triggerSimAction(chosen);
+      }, 4000);
+    }
+
+    function stopAutoSimulation() {
+      if (autoSimInterval) {
+        clearInterval(autoSimInterval);
+        autoSimInterval = null;
+      }
+    }
+    // ═════════════════════════════════════════════════════════════════════════
+    // BACKUPS API
+    // ═════════════════════════════════════════════════════════════════════════
+    async function loadBackups() {
+      const tbody = document.getElementById('backup-table-body');
+      try {
+        const res = await fetch('/api/v1/backups');
+        const json = await res.json();
+        const data = json.data || [];
+
+        const countEl = document.getElementById('stat-backup-count');
+        if (countEl) countEl.innerText = data.length;
+        const totalMb = ((json.total_storage_bytes || 0) / (1024 * 1024)).toFixed(2);
+        const sizeEl = document.getElementById('stat-backup-size');
+        if (sizeEl) sizeEl.innerText = `${totalMb} MB terpakai`;
+
+        if (data.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-muted); padding: 2rem;">Belum ada arsip backup. Klik tombol "Buat Backup Baru" untuk mencadangkan.</td></tr>';
+          return;
+        }
+
+        tbody.innerHTML = data.map(b => {
+          const dateStr = new Date(b.created_at).toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' });
+          const dbEntries = Object.entries(b.databases || {});
+          let dbs = '-';
+          if (dbEntries.length > 0) {
+            dbs = dbEntries.map(([name, info]) => {
+              const ok = info && info.status === 'ok';
+              const color = ok ? '#34d399' : '#f87171';
+              const rows = (info && info.rows !== undefined) ? ` (${info.rows} rows)` : '';
+              return `<span style="display:inline-block; margin:2px; font-size:0.75rem; background:#0f172a; padding:2px 6px; border-radius:4px; border:1px solid #1e293b; color:${color};">${name}${rows}</span>`;
+            }).join('');
+          }
+          return `
+            <tr>
+              <td>
+                <b>${b.filename}</b>
+                ${b.note ? `<div style="font-size: 0.75rem; color: var(--text-muted);">${b.note}</div>` : ''}
+              </td>
+              <td><span class="badge badge-info">${b.scope}</span></td>
+              <td><b>${b.size_human}</b></td>
+              <td>${dateStr}</td>
+              <td><div>${dbs}</div></td>
+              <td style="white-space: nowrap;">
+                <a href="/api/v1/backups/${encodeURIComponent(b.filename)}/download" class="btn btn-primary btn-sm" title="Unduh Arsip">⬇️ Unduh</a>
+                <button onclick="verifyBackup('${b.filename}')" class="btn btn-sm" style="background: #0284c7; color: #fff;" title="Verifikasi Integritas">🔍 Verifikasi</button>
+                <button onclick="viewManifest('${b.filename}')" class="btn btn-sm" style="background: #334155; color: #fff;" title="Lihat Isi">📋 Isi</button>
+                <button onclick="deleteBackup('${b.filename}')" class="btn btn-danger btn-sm" title="Hapus">🗑️</button>
+              </td>
+            </tr>
+          `;
+        }).join('');
+      } catch (err) {
+        tbody.innerHTML = `<tr><td colspan="6" style="text-align: center; color: #f87171; padding: 2rem;">Gagal memuat arsip backup: ${err.message}</td></tr>`;
+      }
+    }
+
+    function openCreateBackupModal() {
+      document.getElementById('modal-create-backup').classList.add('active');
+    }
+    function closeCreateBackupModal() {
+      document.getElementById('modal-create-backup').classList.remove('active');
+    }
+
+    async function handleCreateBackup(e) {
+      e.preventDefault();
+      const scope = document.getElementById('backup-scope').value;
+      const note = document.getElementById('backup-note').value;
+      const btn = document.getElementById('btn-submit-backup');
+      const origText = btn.innerHTML;
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner"></span> Sedang Mencadangkan...';
+
+      try {
+        const res = await fetch('/api/v1/backups/create', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ scope, note })
+        });
+        const json = await res.json();
+        if (res.ok) {
+          closeCreateBackupModal();
+          showNotification('success', json.message || 'Backup berhasil dibuat!');
+          loadBackups();
+          simulateBackupTrigger();
+        } else {
+          showNotification('danger', json.detail || 'Gagal membuat backup');
+        }
+      } catch (err) {
+        showNotification('danger', 'Error membuat backup: ' + err.message);
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = origText;
+      }
+    }
+
+    async function viewManifest(filename) {
+      const modal = document.getElementById('modal-manifest');
+      const content = document.getElementById('manifest-content');
+      document.getElementById('manifest-modal-title').innerText = `📋 Manifest: ${filename}`;
+      content.innerText = 'Memuat manifest dari arsip...';
+      modal.classList.add('active');
+
+      try {
+        const res = await fetch(`/api/v1/backups/${encodeURIComponent(filename)}/manifest`);
+        const json = await res.json();
+        if (res.ok) {
+          content.innerText = JSON.stringify(json.data, null, 2);
+        } else {
+          content.innerText = 'Gagal memuat manifest: ' + (json.detail || 'Unknown error');
+        }
+      } catch (err) {
+        content.innerText = 'Error: ' + err.message;
+      }
+    }
+
+    function closeManifestModal() {
+      document.getElementById('modal-manifest').classList.remove('active');
+    }
+
+    async function verifyBackup(filename) {
+      const modal = document.getElementById('modal-verify');
+      const body = document.getElementById('verify-modal-body');
+      document.getElementById('verify-modal-title').innerText = `🔍 Verifikasi Arsip: ${filename}`;
+      body.innerHTML = `
+        <div style="text-align: center; padding: 2rem;">
+          <div class="spinner" style="display: inline-block; width: 32px; height: 32px; border: 3px solid rgba(255,255,255,0.2); border-top-color: #38bdf8; border-radius: 50%; animation: spin 0.8s linear infinite;"></div>
+          <div style="margin-top: 1rem; color: #94a3b8;">Sedang mengekstrak arsip, menguji integritas stream .tar.gz, validasi checksum SHA-256, dan validasi sintaks SQL/Flux...</div>
+        </div>
+      `;
+      modal.classList.add('active');
+
+      try {
+        const res = await fetch(`/api/v1/backups/${encodeURIComponent(filename)}/verify`, { method: 'POST' });
+        const json = await res.json();
+        if (!res.ok) {
+          body.innerHTML = `<div style="color: #f87171; padding: 1rem;">Gagal memverifikasi arsip: ${json.detail || 'Unknown error'}</div>`;
+          return;
+        }
+
+        const rep = json.data || {};
+        const isPassed = rep.status === 'PASSED';
+        const badgeColor = isPassed ? '#10b981' : (rep.status === 'WARNING' ? '#f59e0b' : '#ef4444');
+
+        let dbHtml = '';
+        if (rep.databases && Object.keys(rep.databases).length > 0) {
+          dbHtml = Object.values(rep.databases).map(d => `
+            <div style="display: flex; justify-content: space-between; align-items: center; background: #0f172a; padding: 6px 12px; border-radius: 6px; margin-bottom: 4px; font-size: 0.8rem; border: 1px solid #1e293b;">
+              <div>
+                <b>${d.file}</b>
+                <span style="color: #64748b; margin-left: 8px;">${d.size_human} (${d.format})</span>
+              </div>
+              <span class="badge ${d.valid ? 'badge-success' : 'badge-danger'}">${d.valid ? '✓ Valid Format' : '✗ Kosong/Corrupted'}</span>
+            </div>
+          `).join('');
+        } else {
+          dbHtml = '<div style="color: #64748b; font-size: 0.8rem; padding: 4px;">Tidak ada database dalam arsip ini.</div>';
+        }
+
+        let cfgHtml = '';
+        if (rep.configs && Object.keys(rep.configs).length > 0) {
+          cfgHtml = Object.values(rep.configs).map(c => `
+            <div style="display: flex; justify-content: space-between; align-items: center; background: #0f172a; padding: 6px 12px; border-radius: 6px; margin-bottom: 4px; font-size: 0.8rem; border: 1px solid #1e293b;">
+              <div>
+                <b>${c.file}</b>
+                <span style="color: #64748b; margin-left: 8px;">${c.size_human}</span>
+              </div>
+              <span class="badge ${c.valid ? 'badge-success' : 'badge-danger'}">${c.valid ? '✓ Utuh' : '✗ Kosong'}</span>
+            </div>
+          `).join('');
+        } else {
+          cfgHtml = '<div style="color: #64748b; font-size: 0.8rem; padding: 4px;">Tidak ada file konfigurasi dalam arsip ini.</div>';
+        }
+
+        body.innerHTML = `
+          <div style="display: flex; gap: 1rem; margin-bottom: 1.25rem;">
+            <div style="flex: 1; background: #0f172a; padding: 1rem; border-radius: 8px; border: 1px solid #1e293b; text-align: center;">
+              <div style="color: #64748b; font-size: 0.75rem; text-transform: uppercase;">Status Integritas</div>
+              <div style="font-size: 1.4rem; font-weight: 800; color: ${badgeColor}; margin-top: 4px;">${rep.status}</div>
+            </div>
+            <div style="flex: 1; background: #0f172a; padding: 1rem; border-radius: 8px; border: 1px solid #1e293b; text-align: center;">
+              <div style="color: #64748b; font-size: 0.75rem; text-transform: uppercase;">Skor Kelayakan Restore</div>
+              <div style="font-size: 1.4rem; font-weight: 800; color: #38bdf8; margin-top: 4px;">${rep.integrity_score_percent}%</div>
+            </div>
+            <div style="flex: 1; background: #0f172a; padding: 1rem; border-radius: 8px; border: 1px solid #1e293b; text-align: center;">
+              <div style="color: #64748b; font-size: 0.75rem; text-transform: uppercase;">Total File Diarsip</div>
+              <div style="font-size: 1.4rem; font-weight: 800; color: #a78bfa; margin-top: 4px;">${rep.total_files || 0} File</div>
+            </div>
+          </div>
+
+          <div style="background: #0b1426; padding: 0.75rem 1rem; border-radius: 6px; font-family: monospace; font-size: 0.75rem; color: #94a3b8; margin-bottom: 1rem; word-break: break-all; border: 1px solid #1e3a8a;">
+            <div><b>SHA-256 Checksum:</b> ${rep.sha256}</div>
+            <div style="margin-top: 4px;"><b>Struktur Tar.gz:</b> ${rep.tar_intact ? '✅ Valid Archive Stream' : '❌ Corrupted'} | <b>Manifest:</b> ${rep.manifest_intact ? '✅ Valid JSON Metadata' : '❌ Missing'}</div>
+          </div>
+
+          <div style="margin-bottom: 1rem;">
+            <div style="font-weight: 700; font-size: 0.85rem; color: #cbd5e1; margin-bottom: 0.5rem;">📁 Database Dump Verification:</div>
+            ${dbHtml}
+          </div>
+
+          <div>
+            <div style="font-weight: 700; font-size: 0.85rem; color: #cbd5e1; margin-bottom: 0.5rem;">⚙️ System &amp; Network Config Verification:</div>
+            ${cfgHtml}
+          </div>
+        `;
+      } catch (err) {
+        body.innerHTML = `<div style="color: #f87171; padding: 1rem;">Error memverifikasi: ${err.message}</div>`;
+      }
+    }
+
+    function closeVerifyModal() {
+      document.getElementById('modal-verify').classList.remove('active');
+    }
+
+    async function deleteBackup(filename) {
+      if (!confirm(`Hapus arsip backup ${filename}?`)) return;
+      try {
+        const res = await fetch(`/api/v1/backups/${encodeURIComponent(filename)}`, { method: 'DELETE' });
+        const json = await res.json();
+        if (res.ok) {
+          showNotification('success', json.message);
+          loadBackups();
+        } else {
+          showNotification('danger', json.detail || 'Gagal menghapus');
+        }
+      } catch (err) {
+        showNotification('danger', 'Error: ' + err.message);
+      }
+    }
+
+    async function syncIotTelemetry() {
+      try {
+        simulateTelemetryPing();
+        const res = await fetch('/api/devices/sync', { method: 'POST' });
+        const json = await res.json();
+        alert('Sinkronisasi armada Heatpress berhasil: ' + (json.message || 'Tersinkron dengan Prometheus'));
+      } catch (err) {
+        alert('Gagal sinkronisasi: ' + err.message);
+      }
+    }
+
+    function showNotification(type, msg) {
+      const el = document.getElementById('backup-alert');
+      if (!el) return;
+      el.style.display = 'block';
+      el.style.backgroundColor = type === 'success' ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.2)';
+      el.style.color = type === 'success' ? '#34d399' : '#f87171';
+      el.style.border = `1px solid ${type === 'success' ? '#059669' : '#dc2626'}`;
+      el.innerText = msg;
+      setTimeout(() => { el.style.display = 'none'; }, 5000);
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // DNS MANAGEMENT
+    // ═════════════════════════════════════════════════════════════════════════
+    async function loadDnsRecords() {
+      const tbody = document.getElementById('dns-table-body');
+      if (!tbody) return;
+      try {
+        const [resRecords, resStatus] = await Promise.all([
+          fetch('/api/v1/dns/records'),
+          fetch('/api/v1/dns/status').catch(() => null)
+        ]);
+        const json = await resRecords.json();
+        const data = json.data || [];
+
+        const countEl = document.getElementById('stat-dns-count');
+        if (countEl) countEl.innerText = data.length;
+
+        if (resStatus && resStatus.ok) {
+          const stJson = await resStatus.json();
+          const d = stJson.data || {};
+          const bEl = document.getElementById('dns-status-badge');
+          if (bEl) bEl.innerText = `${d.dns_server_port_53} (:53)`;
+        }
+
+        if (data.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: var(--text-muted); padding: 2rem;">Belum ada domain terdaftar.</td></tr>';
+          return;
+        }
+
+        tbody.innerHTML = data.map(d => {
+          const badgeClass = d.is_system ? 'badge-success' : 'badge-info';
+          return `
+            <tr>
+              <td>
+                <a href="${d.url}" target="_blank" style="color: #60a5fa; font-weight: 700; text-decoration: none; display: inline-flex; align-items: center; gap: 0.35rem;">
+                  🌐 ${d.domain} ↗
+                </a>
+              </td>
+              <td><span class="badge ${badgeClass}">${d.category}</span></td>
+              <td><code>${d.target}</code></td>
+              <td style="color: var(--text-muted);">${d.description}</td>
+              <td>
+                ${d.is_system ? '<span style="color: var(--text-muted); font-size: 0.75rem;">Sistem Utama</span>' : `
+                  <button onclick="deleteDomainRoute('${d.domain}')" class="btn btn-danger btn-sm" title="Hapus Rute">🗑️</button>
+                `}
+              </td>
+            </tr>
+          `;
+        }).join('');
+      } catch (err) {
+        tbody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: #f87171; padding: 2rem;">Gagal memuat domain: ${err.message}</td></tr>`;
+      }
+    }
+
+    function openAddDomainModal() {
+      document.getElementById('modal-add-domain').classList.add('active');
+    }
+    function closeAddDomainModal() {
+      document.getElementById('modal-add-domain').classList.remove('active');
+    }
+
+    async function handleAddDomain(e) {
+      e.preventDefault();
+      const domain = document.getElementById('domain-name').value;
+      const target_port = parseInt(document.getElementById('domain-port').value, 10);
+      const target_host = document.getElementById('domain-host').value || 'host.docker.internal';
+      const btn = document.getElementById('btn-submit-domain');
+      const orig = btn.innerHTML;
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner"></span> Menyimpan...';
+
+      try {
+        const res = await fetch('/api/v1/dns/records', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ domain, target_port, target_host })
+        });
+        const json = await res.json();
+        if (res.ok) {
+          closeAddDomainModal();
+          showNotification('success', json.message || 'Domain berhasil didaftarkan!');
+          loadDnsRecords();
+        } else {
+          showNotification('danger', json.detail || 'Gagal mendaftarkan domain');
+        }
+      } catch (err) {
+        showNotification('danger', 'Error: ' + err.message);
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = orig;
+      }
+    }
+
+    async function deleteDomainRoute(domain) {
+      if (!confirm(`Hapus domain lokal ${domain}?`)) return;
+      try {
+        const res = await fetch(`/api/v1/dns/records/${encodeURIComponent(domain)}`, { method: 'DELETE' });
+        const json = await res.json();
+        if (res.ok) {
+          showNotification('success', json.message);
+          loadDnsRecords();
+        } else {
+          showNotification('danger', json.detail || 'Gagal menghapus');
+        }
+      } catch (err) {
+        showNotification('danger', 'Error: ' + err.message);
+      }
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // INITIALIZATION
+    // ═════════════════════════════════════════════════════════════════════════
+    async function checkWorkerStatus() {
+      const el = document.getElementById('worker-status-badge');
+      if (!el) return;
+      try {
+        const res = await fetch('/api/v1/system/worker-status');
+        if (res.ok) {
+          const json = await res.json();
+          const d = json.data || {};
+          if (d.healthy) {
+            el.className = 'badge badge-success';
+            el.innerText = `Worker Active • Decoupled (${d.details?.uptime_sec || 0}s)`;
+          } else if (d.status === 'not_registered') {
+            el.className = 'badge badge-info';
+            el.innerText = 'Internal Mode';
+          } else {
+            el.className = 'badge badge-danger';
+            el.innerText = `Worker ${d.status}`;
+          }
+        }
+      } catch (e) {}
+    }
+
+    window.addEventListener('resize', resizeCanvas);
+
+    document.addEventListener('DOMContentLoaded', () => {
+      resizeCanvas();
+      lastFrameTime = performance.now();
+      requestAnimationFrame(animateParticles);
+      hydrateInitialTraffic();
+      connectRealtimeTraffic();
+      loadBackups();
+      checkWorkerStatus();
+      setInterval(checkWorkerStatus, 15000);
+    });
+  </script>
+</body>
+</html>

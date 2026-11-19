@@ -1,0 +1,256 @@
+"""FastAPI application entry point for Personal API Platform (PAP) & Unified Homelab Core Gateway."""
+
+from contextlib import asynccontextmanager
+import os
+from pathlib import Path
+
+from fastapi import APIRouter, FastAPI, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
+
+from app.core.config import get_settings
+from app.core.database import Base, SessionLocal, engine
+from app.core.exceptions import register_exception_handlers
+from app.core.logging import configure_logging
+from app.core.middleware import RequestContextAndSecurityMiddleware
+from app.modules import import_all_models
+from app.modules.audit.router import router as audit_router
+from app.modules.auth.router import router as auth_router
+from app.modules.automation.router import router as automation_router
+from app.modules.backups.router import router as backups_router
+from app.modules.clients.router import router as clients_router
+from app.modules.database_registry.router import (
+    databases_router,
+    router as database_router,
+)
+from app.modules.dns.router import router as dns_router
+from app.modules.docker.router import router as docker_router
+from app.modules.infra.router import router as infra_router
+from app.modules.integrations.router import router as integrations_router
+from app.modules.iot.fleet_router import compat_devices_router, v1_fleet_router
+from app.modules.iot.router import router as iot_router
+from app.modules.metrics.router import router as metrics_router
+from app.modules.monitoring.router import router as monitoring_router
+from app.modules.permissions.router import router as permissions_router
+from app.modules.projects.router import (
+    deployments_router,
+    router as projects_router,
+)
+from app.modules.server.router import router as server_router
+from app.modules.traffic.router import router as traffic_router
+from app.modules.users.router import router as users_router
+from app.modules.webhooks.router import router as webhooks_router
+from app.services.bootstrap import seed_platform_registry
+
+# Dynamic imports for unified PSM control plane (resolved via importlib to avoid static analysis missing-import warnings)
+import importlib
+import sys
+
+psm_api_router = None
+init_psm_db = None
+psm_ws_router = None
+psm_agents_router = None
+psm_servers_router = None
+psm_containers_router = None
+HAS_PSM_DIRECT = False
+
+try:
+    psm_dir = Path(__file__).resolve().parent.parent.parent / "Personal_Server_Manager"
+    if psm_dir.exists() and str(psm_dir) not in sys.path:
+        sys.path.insert(0, str(psm_dir))
+
+    psm_router_mod = importlib.import_module("apps.api.app.api.v1.router")
+    psm_main_mod = importlib.import_module("apps.api.app.main")
+    psm_ws_mod = importlib.import_module("apps.api.app.websocket.handlers")
+
+    psm_api_router = getattr(psm_router_mod, "api_router", None)
+    init_psm_db = getattr(psm_main_mod, "init_db", None)
+    psm_ws_router = getattr(psm_ws_mod, "ws_router", None)
+
+    try:
+        psm_agents_mod = importlib.import_module("apps.api.app.api.v1.agents")
+        psm_servers_mod = importlib.import_module("apps.api.app.api.v1.servers")
+        psm_containers_mod = importlib.import_module("apps.api.app.api.v1.containers")
+
+        psm_agents_router = getattr(psm_agents_mod, "router", None)
+        psm_servers_router = getattr(psm_servers_mod, "router", None)
+        psm_containers_router = getattr(psm_containers_mod, "router", None)
+    except Exception:
+        pass
+
+    HAS_PSM_DIRECT = bool(psm_api_router)
+except Exception as e:
+    HAS_PSM_DIRECT = False
+
+
+@asynccontextmanager
+async def _lifespan(application: FastAPI):
+    # 1. Initialize PAP Core Database
+    try:
+        import_all_models()
+        Base.metadata.create_all(bind=engine)
+        with SessionLocal() as db:
+            seed_platform_registry(db)
+    except Exception as e:
+        print(f"[PAP Core] Startup notice: {e}")
+
+    # 2. Initialize PSM Database (auto-creates 'psm' PostgreSQL db and seeds homelab)
+    if HAS_PSM_DIRECT and init_psm_db:
+        try:
+            init_psm_db()
+            print("[PAP Core] PSM Control Plane database & schema ready.")
+        except Exception as e:
+            print(f"[PAP Core] PSM DB init notice: {e}")
+
+    # 3. Start Realtime MQTT -> InfluxDB Consumer Worker (if enabled on this node)
+    enable_mqtt = os.getenv("ENABLE_MQTT_CONSUMER", "false").lower() in ("true", "1", "yes")
+    if enable_mqtt:
+        try:
+            from app.services.mqtt_influx_consumer import mqtt_influx_consumer
+            mqtt_influx_consumer.start()
+            print("[PAP Core] MQTT -> InfluxDB Realtime Consumer worker active (in-process).")
+        except Exception as e:
+            print(f"[PAP Core] MQTT Influx consumer notice: {e}")
+    else:
+        print("[PAP Core] MQTT Consumer decoupled. Background workload delegated to pap-worker service.")
+
+    yield
+
+    try:
+        from app.modules.traffic.broadcaster import traffic_broadcaster
+        await traffic_broadcaster.shutdown()
+    except Exception:
+        pass
+
+    try:
+        from app.services.mqtt_influx_consumer import mqtt_influx_consumer
+        if mqtt_influx_consumer.is_running:
+            mqtt_influx_consumer.stop()
+    except Exception:
+        pass
+
+
+def create_app() -> FastAPI:
+    settings = get_settings()
+    configure_logging(debug=settings.APP_DEBUG)
+    import_all_models()
+
+    application = FastAPI(
+        title=settings.APP_NAME,
+        description=(
+            "Central Core API Gateway & Management Platform for Homelab Server, "
+            "PSM Control Plane, IoT Devices, Database Registry, and Disaster Recovery Backups."
+        ),
+        version=settings.APP_VERSION,
+        docs_url="/docs",
+        redoc_url="/redoc",
+        lifespan=_lifespan,
+    )
+
+    application.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_origin_list,
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "X-API-Key", "X-Device-Credential", "X-Request-ID"],
+    )
+    application.add_middleware(RequestContextAndSecurityMiddleware)
+
+    register_exception_handlers(application)
+
+    # ── Root Endpoints ─────────────────────────────────────────────────────────
+    # System info, health, and prometheus metrics
+    application.include_router(server_router)
+    # IoT Dashboard direct compatibility routes (/api/devices/*, /api/health)
+    application.include_router(compat_devices_router)
+
+    # PSM WebSockets (/ws/servers/..., /ws/deployments/...)
+    if HAS_PSM_DIRECT and psm_ws_router:
+        application.include_router(psm_ws_router)
+
+    # ── Versioned API v1 Router (/api/v1/...) ──────────────────────────────────
+    api_v1 = APIRouter(prefix=settings.API_PREFIX)
+    api_v1.include_router(server_router)
+    api_v1.include_router(infra_router)  # Unified Server & Infra Management (Section 4.1)
+    api_v1.include_router(auth_router)
+    api_v1.include_router(backups_router)  # Unified Backup & Disaster Recovery
+    api_v1.include_router(dns_router)  # Local DNS & Virtual Host Manager
+    api_v1.include_router(traffic_router)  # Realtime API Traffic Streaming & Topology Telemetry
+    api_v1.include_router(users_router)
+    api_v1.include_router(permissions_router)
+    api_v1.include_router(projects_router)  # Project Registry & Deployments (Section 4.2)
+    api_v1.include_router(deployments_router)  # Deployment Status (Section 4.2)
+    api_v1.include_router(clients_router)
+    api_v1.include_router(database_router)  # Database Registry
+    api_v1.include_router(databases_router)  # Database Center (Section 4.3)
+    api_v1.include_router(automation_router)  # Automation Engine (Section 4.4)
+    api_v1.include_router(integrations_router)
+    api_v1.include_router(v1_fleet_router)
+    api_v1.include_router(iot_router)  # IoT Platform & Machine Registry (Section 4.5)
+    api_v1.include_router(metrics_router)
+    api_v1.include_router(monitoring_router)
+    api_v1.include_router(docker_router)
+    api_v1.include_router(webhooks_router)
+    api_v1.include_router(audit_router)
+
+    application.include_router(api_v1)
+
+    # ── PSM Control Plane Integration ──────────────────────────────────────────
+    if HAS_PSM_DIRECT:
+        if psm_api_router:
+            # Mount PSM under /psm/api/v1 and /api/v1/psm for operations layer
+            application.include_router(psm_api_router, prefix="/psm/api/v1")
+            application.include_router(psm_api_router, prefix="/api/v1/psm")
+        if psm_agents_router:
+            application.include_router(psm_agents_router, prefix="/api/v1")
+        if psm_servers_router:
+            application.include_router(psm_servers_router, prefix="/api/v1")
+        if psm_containers_router:
+            application.include_router(psm_containers_router, prefix="/api/v1")
+
+    # ── Mission Control Web Management UI ──────────────────────────────────────
+    @application.get("/", response_class=HTMLResponse, include_in_schema=False)
+    @application.get("/ui", response_class=HTMLResponse, include_in_schema=False)
+    async def serve_mission_control_ui():
+        ui_file = Path(__file__).parent / "ui" / "index.html"
+        if ui_file.exists():
+            return HTMLResponse(content=ui_file.read_text(encoding="utf-8"))
+        return HTMLResponse(content="<h1>PAP Core Gateway Running</h1><p><a href='/docs'>Swagger API Docs</a></p>")
+
+    # ── Agent Setup Script ─────────────────────────────────────────────────────
+    @application.get("/install-agent.sh", include_in_schema=False)
+    async def install_agent_script():
+        script_content = """#!/usr/bin/env bash
+set -e
+echo "========================================="
+echo "Personal Server Manager (PSM) Agent Setup"
+echo "========================================="
+
+if [ -z "$PSM_SERVER_ID" ] || [ -z "$PSM_TOKEN" ]; then
+  echo "Error: PSM_SERVER_ID and PSM_TOKEN environment variables are required."
+  exit 1
+fi
+
+PSM_CONTROL_PLANE="${PSM_CONTROL_PLANE:-http://localhost:8000}"
+INSTALL_DIR="/opt/psm/agent"
+
+echo "Target Control Plane: $PSM_CONTROL_PLANE"
+echo "Server ID: $PSM_SERVER_ID"
+
+mkdir -p "$INSTALL_DIR"
+cd "$INSTALL_DIR"
+
+cat <<EOF > agent.env
+SERVER_ID=$PSM_SERVER_ID
+AGENT_TOKEN=$PSM_TOKEN
+CONTROL_PLANE_URL=$PSM_CONTROL_PLANE
+EOF
+
+echo "PSM Agent configured successfully at $INSTALL_DIR/agent.env"
+"""
+        return Response(content=script_content, media_type="text/x-shellscript")
+
+    return application
+
+
+app = create_app()

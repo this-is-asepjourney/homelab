@@ -1,0 +1,11 @@
+{
+  "enabled": true,
+  "discord_webhook_url": "https://discord.com/api/webhooks/mock/123",
+  "telegram_bot_token": "123456:ABC-DEF",
+  "telegram_chat_id": "-10012345678",
+  "cpu_threshold": 85.0,
+  "memory_threshold": 90.0,
+  "disk_threshold": 90.0,
+  "notify_server_offline": true,
+  "notify_deployments": true
+}

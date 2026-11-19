@@ -1,0 +1,45 @@
+{
+  "created_at": "2026-11-19T01:05:37.141297+00:00",
+  "backup_type": "database",
+  "name": "test-export-snapshot",
+  "servers_count": 2,
+  "projects_count": 3,
+  "deployments_count": 4,
+  "servers": [
+    {
+      "id": "674c863b-b433-43b8-af99-05cf7d869742",
+      "name": "Homelab-Primary",
+      "hostname": "ubuntu-homelab.local",
+      "os_name": "Ubuntu Server"
+    },
+    {
+      "id": "7af11872-32fb-4b06-9607-5effb130c34c",
+      "name": "Worker-Node-01",
+      "hostname": "worker01.local",
+      "os_name": "Ubuntu Server"
+    }
+  ],
+  "projects": [
+    {
+      "id": "6ac4382a-fbe7-47f4-be05-797d98f591e4",
+      "name": "portfolio-website",
+      "framework": "Next.js",
+      "source_type": "git",
+      "server_id": "674c863b-b433-43b8-af99-05cf7d869742"
+    },
+    {
+      "id": "0d19439a-7c3c-4382-ba81-b46bd5ab1d3d",
+      "name": "sample-backend-api",
+      "framework": "FastAPI",
+      "source_type": "git",
+      "server_id": "7af11872-32fb-4b06-9607-5effb130c34c"
+    },
+    {
+      "id": "06cc8805-4b4a-4ec4-ae1d-6673c991e1c5",
+      "name": "Homelab-Cache",
+      "framework": "docker",
+      "source_type": "compose",
+      "server_id": "7af11872-32fb-4b06-9607-5effb130c34c"
+    }
+  ]
+}
