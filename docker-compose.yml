@@ -254,6 +254,7 @@ services:
       PAP_API_URL: http://pap-api:8000
       PAP_API_KEY: ${PAP_PSM_SERVICE_KEY:-pap_key_psm_control_plane_default_secret_key_2026}
     volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
       - psm_storage:/opt/psm
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
