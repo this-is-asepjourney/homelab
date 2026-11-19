@@ -1,0 +1,31 @@
+# Environment and secrets
+.env
+*.env.local
+
+# Archives and build artifacts
+*.tar.gz
+*.zip
+
+# Python caches and virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+env/
+.pytest_cache/
+
+# Databases & local sqlite
+*.sqlite3
+*.db-journal
+
+# Storage & temp files
+storage/backups/
+storage/logs/
+*.log
+
+# Node modules
+node_modules/
+.next/
+dist/
+out/
