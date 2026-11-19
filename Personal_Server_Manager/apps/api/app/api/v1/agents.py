@@ -77,7 +77,14 @@ def register_agent(payload: AgentRegisterRequest, db: Session = Depends(get_db))
     if payload.architecture:
         server.architecture = payload.architecture
     if payload.hostname:
-        server.hostname = payload.hostname
+        import re
+        existing_is_ipv4 = bool(
+            server.hostname
+            and re.match(r"^\d{1,3}(?:\.\d{1,3}){3}$", server.hostname.strip())
+            and server.hostname.strip() not in ("127.0.0.1", "0.0.0.0")
+        )
+        if not existing_is_ipv4:
+            server.hostname = payload.hostname
 
     server.status = "online"
     server.last_seen = now

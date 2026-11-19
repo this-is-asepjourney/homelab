@@ -1,0 +1,18 @@
+.:53 {
+    log
+    errors
+    hosts /etc/coredns/homelab.hosts {
+        reload 5s
+        fallthrough
+    }
+    template IN A tailscale.homelab {
+        match ^([a-zA-Z0-9-]+\.)+tailscale\.homelab\.$
+        answer "{{ .Name }} 60 IN A {$SERVER_TS_IP}"
+    }
+    template IN A homelab {
+        match ^([a-zA-Z0-9-]+\.)*homelab\.$
+        answer "{{ .Name }} 60 IN A {$SERVER_LAN_IP}"
+    }
+    forward . 1.1.1.1 8.8.8.8
+    cache 30
+}

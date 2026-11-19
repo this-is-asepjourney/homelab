@@ -468,3 +468,45 @@ def test_pap_main_api_and_iot_fleet_integration(client):
     fleet_data = fleet_res.json()
     assert fleet_data["category"] == "Heatpress"
     assert fleet_data["summary"]["total_devices"] >= 3
+
+
+def test_project_access_urls_and_sync_domain(client):
+    token = get_auth_token(client)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    srv_res = client.get("/api/v1/servers", headers=headers)
+    assert srv_res.status_code == 200
+    server_id = srv_res.json()[0]["id"]
+
+    # Create project with explicit port_mappings and custom domain
+    create_res = client.post(
+        "/api/v1/projects",
+        json={
+            "server_id": server_id,
+            "name": "pos-main",
+            "framework": "Laravel",
+            "source_type": "git",
+            "repository_url": "https://github.com/example/pos-main.git",
+            "port_mappings": "3100:80",
+            "domain": "pos-main.homelab",
+            "db_type": "none",
+            "auto_deploy": False,
+        },
+        headers=headers,
+    )
+    assert create_res.status_code == 200
+    proj = create_res.json()
+    assert proj["domain"] == "pos-main.homelab"
+    assert proj["server_ip"] == "192.168.25.105"
+    assert proj["server_tailscale_ip"] == "100.78.113.53"
+    assert proj["access_urls"]["domain"] == "http://pos-main.homelab"
+    assert proj["access_urls"]["lan_ip"] == "http://192.168.25.105:3100"
+    assert proj["access_urls"]["tailscale_ip"] == "http://100.78.113.53:3100"
+
+    # Trigger single-project domain sync endpoint
+    sync_dom_res = client.post(f"/api/v1/projects/{proj['id']}/sync-domain", headers=headers)
+    assert sync_dom_res.status_code == 200
+    sync_dom_data = sync_dom_res.json()
+    assert sync_dom_data["domain"] == "pos-main.homelab"
+    assert sync_dom_data["target_port"] == 3100
+    assert sync_dom_data["access_urls"]["lan_ip"] == "http://192.168.25.105:3100"

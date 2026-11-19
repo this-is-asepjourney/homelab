@@ -17,6 +17,7 @@ import {
   ExternalLink,
 } from 'lucide-react';
 import { api } from '../../lib/api';
+import { resolveProjectAccess } from '../../lib/utils';
 import { DeployProjectModal } from '../../components/deploy-project-modal';
 
 export default function ProjectsPage() {
@@ -136,6 +137,7 @@ export default function ProjectsPage() {
               .replace(/[^a-z0-9_]/g, '_')
               .replace(/_+/g, '_')
               .replace(/^_|_$/g, '');
+            const access = resolveProjectAccess(p, servers);
 
             return (
               <div
@@ -176,20 +178,57 @@ export default function ProjectsPage() {
                     {/* Domain & Local DNS */}
                     <div className="flex items-center justify-between gap-1 text-xs">
                       <a
-                        href={`http://${p.domain || `${dbSlug}.homelab`}`}
+                        href={access.domainUrl}
                         target="_blank"
                         rel="noreferrer"
                         className="flex items-center gap-1.5 font-mono text-indigo-400 hover:text-indigo-300 hover:underline truncate"
-                        title="Buka via Local DNS & Router (Port 80)"
+                        title="Buka via Domain Pribadi & Nginx Router (Port 80)"
                       >
                         <Globe className="w-3.5 h-3.5 shrink-0" />
-                        <span className="truncate">{p.domain || `${dbSlug}.homelab`}</span>
+                        <span className="truncate">{access.domain}</span>
                         <ExternalLink className="w-3 h-3 shrink-0 opacity-70" />
                       </a>
                       <span className="text-[10px] px-1.5 py-0.2 rounded bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 font-mono shrink-0">
                         :80
                       </span>
                     </div>
+
+                    {/* Direct IP & Port Access Links */}
+                    {access.lanUrl && access.hostPort && (
+                      <div className="flex items-center justify-between gap-1 text-xs">
+                        <a
+                          href={access.lanUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="flex items-center gap-1.5 font-mono text-emerald-400 hover:text-emerald-300 hover:underline truncate"
+                          title="Buka langsung via IP LAN & Port Docker"
+                        >
+                          <ExternalLink className="w-3.5 h-3.5 shrink-0" />
+                          <span className="truncate">{access.lanIp}:{access.hostPort}</span>
+                        </a>
+                        <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono shrink-0">
+                          IP:Port
+                        </span>
+                      </div>
+                    )}
+
+                    {access.tailscaleUrl && access.hostPort && access.tailscaleUrl !== access.lanUrl && (
+                      <div className="flex items-center justify-between gap-1 text-xs">
+                        <a
+                          href={access.tailscaleUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="flex items-center gap-1.5 font-mono text-sky-400 hover:text-sky-300 hover:underline truncate"
+                          title="Buka via IP Tailscale (Remote)"
+                        >
+                          <ExternalLink className="w-3.5 h-3.5 shrink-0" />
+                          <span className="truncate">{access.tailscaleIp}:{access.hostPort}</span>
+                        </a>
+                        <span className="text-[10px] px-1.5 py-0.2 rounded bg-sky-500/10 text-sky-400 border border-sky-500/20 font-mono shrink-0">
+                          TS
+                        </span>
+                      </div>
+                    )}
 
                     {/* Port Mappings Display */}
                     <div className="flex items-center gap-1.5 font-mono text-gray-400 text-[11px]">

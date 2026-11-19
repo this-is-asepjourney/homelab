@@ -23,6 +23,10 @@ class Settings(BaseSettings):
         "ENCRYPTION_MASTER_KEY", "uO1HwXG9J5vYyZl3eQ0f9T_m0K8xW-4jR2hD8qV7sLA="
     )
 
+    # Network Host IPs (LAN & Tailscale)
+    SERVER_LAN_IP: str = os.getenv("SERVER_LAN_IP", "192.168.25.105")
+    SERVER_TS_IP: str = os.getenv("SERVER_TS_IP", "100.78.113.53")
+
     # PostgreSQL Configuration (Personal Server Manager Database)
     POSTGRES_DB: str = os.getenv("POSTGRES_DB", "psm")
     POSTGRES_USER: str = os.getenv("POSTGRES_USER", "fadb")
@@ -38,6 +42,10 @@ class Settings(BaseSettings):
 
     # CORS
     CORS_ORIGINS: List[str] = [
+        "http://homelab",
+        "http://psm.homelab",
+        "http://api.homelab",
+        "http://psm-api.homelab",
         "http://localhost:3000",
         "http://localhost:3001",
         "http://localhost:3005",

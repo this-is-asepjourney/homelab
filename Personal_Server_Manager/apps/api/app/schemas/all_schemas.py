@@ -265,6 +265,9 @@ class ProjectResponse(BaseModel):
     domain: Optional[str] = None
     db_type: Optional[str] = "none"
     db_name: Optional[str] = None
+    server_ip: Optional[str] = None
+    server_tailscale_ip: Optional[str] = None
+    access_urls: Optional[Dict[str, Optional[str]]] = None
     deployment_id: Optional[str] = None
     created_at: datetime
 

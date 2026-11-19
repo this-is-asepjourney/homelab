@@ -1,0 +1,22 @@
+# Homelab Local DNS Static Hosts Mapping
+# Host Server: fa (Ubuntu Server)
+
+192.168.25.105 homelab
+192.168.25.105 api.homelab
+192.168.25.105 psm.homelab
+192.168.25.105 psm-api.homelab
+192.168.25.105 nextcloud.homelab
+192.168.25.105 grafana.homelab
+192.168.25.105 prometheus.homelab
+192.168.25.105 kuma.homelab
+192.168.25.105 uptime.homelab
+192.168.25.105 cadvisor.homelab
+
+100.78.113.53 api.tailscale.homelab
+100.78.113.53 psm.tailscale.homelab
+100.78.113.53 psm-api.tailscale.homelab
+100.78.113.53 nextcloud.tailscale.homelab
+100.78.113.53 grafana.tailscale.homelab
+100.78.113.53 prometheus.tailscale.homelab
+100.78.113.53 kuma.tailscale.homelab
+100.78.113.53 cadvisor.tailscale.homelab

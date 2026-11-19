@@ -33,6 +33,7 @@ import {
   AlertCircle,
 } from 'lucide-react';
 import { api, formatBytes } from '../../../lib/api';
+import { resolveProjectAccess } from '../../../lib/utils';
 import { DeployProjectModal } from '../../../components/deploy-project-modal';
 
 export default function ProjectDetailPage() {
@@ -94,6 +95,9 @@ export default function ProjectDetailPage() {
   const [savingProjectSettings, setSavingProjectSettings] = useState(false);
   const [deployingToServer, setDeployingToServer] = useState(false);
   const [projectUpdateSuccessMsg, setProjectUpdateSuccessMsg] = useState('');
+  const [syncingDomain, setSyncingDomain] = useState(false);
+  const [domainSyncMsg, setDomainSyncMsg] = useState<string | null>(null);
+  const [copiedAccessKey, setCopiedAccessKey] = useState<'domain' | 'lan' | 'ts' | null>(null);
 
   const fetchContainerLogs = async () => {
     try {
@@ -417,9 +421,29 @@ export default function ProjectDetailPage() {
     return <div className="p-8 text-center text-gray-500">Project not found.</div>;
   }
 
-  const hostPortOnly = (project?.port_mappings || '3000:3000').split(':')[0]?.trim();
-  const targetServer = servers.find((s) => s.id === project?.server_id);
-  const serverHost = targetServer?.hostname || 'localhost';
+  const handleSyncDomain = async () => {
+    try {
+      setSyncingDomain(true);
+      setDomainSyncMsg(null);
+      const res = await api.syncProjectDomain(projectId);
+      setDomainSyncMsg(res?.message || `Route domain disinkronkan.`);
+      await loadData();
+    } catch (err: any) {
+      setDomainSyncMsg(err.message || 'Gagal menyinkronkan domain route');
+    } finally {
+      setSyncingDomain(false);
+    }
+  };
+
+  const handleCopyAccessUrl = (key: 'domain' | 'lan' | 'ts', url: string) => {
+    navigator.clipboard.writeText(url);
+    setCopiedAccessKey(key);
+    setTimeout(() => setCopiedAccessKey(null), 1800);
+  };
+
+  const access = resolveProjectAccess(project, servers);
+  const hostPortOnly = access.hostPort;
+  const serverHost = access.lanIp;
 
   const currentDbType = (project?.db_type || dbInfo?.db_type || 'postgres').toLowerCase();
   const dbTypeLabel =
@@ -499,27 +523,27 @@ export default function ProjectDetailPage() {
         <div className="flex items-center gap-2.5 flex-wrap">
           {/* Local DNS Ingress Link */}
           <a
-            href={`http://${project?.domain || `${(project?.name || 'app').toLowerCase().replace(/[^a-z0-9_-]/g, '-')}.homelab`}`}
+            href={access.domainUrl}
             target="_blank"
             rel="noreferrer"
             className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-indigo-500/30 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 text-xs font-semibold transition-colors shadow-sm"
-            title="Buka via Local DNS & Ingress Router (Port 80)"
+            title="Buka via Domain Pribadi & Ingress Router (Port 80)"
           >
             <Globe className="w-3.5 h-3.5" />
-            <span>{project?.domain || `${(project?.name || 'app').toLowerCase().replace(/[^a-z0-9_-]/g, '-')}.homelab`}</span>
+            <span>{access.domain}</span>
             <ExternalLink className="w-3 h-3" />
           </a>
 
-          {/* External Access Link if container port is available */}
-          {hostPortOnly && (
+          {/* Direct IP + Port Access Link */}
+          {access.lanUrl && access.hostPort && (
             <a
-              href={`http://${serverHost}:${hostPortOnly}`}
+              href={access.lanUrl}
               target="_blank"
               rel="noreferrer"
-              className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-500 text-xs font-semibold transition-colors shadow-sm"
-              title="Buka via Port Langsung Server"
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-500 text-xs font-semibold font-mono transition-colors shadow-sm"
+              title="Buka langsung via IP LAN Server & Port Docker"
             >
-              <span>Port :{hostPortOnly}</span>
+              <span>{access.lanIp}:{access.hostPort}</span>
               <ExternalLink className="w-3 h-3" />
             </a>
           )}
@@ -543,6 +567,134 @@ export default function ProjectDetailPage() {
             <span>{deploying ? 'Deploying...' : 'Deploy Ulang'}</span>
           </button>
         </div>
+      </div>
+
+      {/* Access Endpoints Card: Domain Pribadi & Direct IP:Port */}
+      <div className="rounded-xl border border-border bg-card p-4 shadow-sm">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-3">
+          <div className="flex items-center gap-2">
+            <Globe className="w-4 h-4 text-indigo-400" />
+            <h2 className="text-xs font-bold uppercase tracking-wider text-foreground">
+              Akses Aplikasi (Domain Pribadi &amp; IP:Port)
+            </h2>
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              onClick={handleSyncDomain}
+              disabled={syncingDomain}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-indigo-500/30 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 text-[11px] font-semibold transition-colors disabled:opacity-50"
+              title="Daftarkan ulang virtual host domain ke Nginx Ingress & CoreDNS"
+            >
+              <RefreshCw className={`w-3 h-3 ${syncingDomain ? 'animate-spin' : ''}`} />
+              <span>{syncingDomain ? 'Menyinkronkan...' : 'Sync Domain Router'}</span>
+            </button>
+            <a
+              href={access.hostsFileUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border hover:bg-background text-gray-400 hover:text-foreground text-[11px] font-medium transition-colors"
+              title="Unduh daftar IP & domain untuk file hosts Windows/Linux"
+            >
+              <Download className="w-3 h-3" />
+              <span>Unduh hosts.txt</span>
+            </a>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          {/* Domain Pribadi */}
+          <div className="flex items-center justify-between gap-2 px-3 py-2.5 rounded-lg bg-background border border-border">
+            <div className="min-w-0">
+              <div className="text-[10px] uppercase tracking-wider text-gray-500 font-semibold">
+                Domain Pribadi (:80)
+              </div>
+              <a
+                href={access.domainUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="text-xs font-mono font-semibold text-indigo-400 hover:underline flex items-center gap-1 truncate"
+              >
+                <span className="truncate">{access.domainUrl}</span>
+                <ExternalLink className="w-3 h-3 shrink-0" />
+              </a>
+            </div>
+            <button
+              onClick={() => handleCopyAccessUrl('domain', access.domainUrl)}
+              className="p-1.5 rounded hover:bg-card text-gray-400 hover:text-foreground shrink-0"
+              title="Salin URL Domain"
+            >
+              {copiedAccessKey === 'domain' ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
+            </button>
+          </div>
+
+          {/* Direct IP LAN + Port */}
+          <div className="flex items-center justify-between gap-2 px-3 py-2.5 rounded-lg bg-background border border-border">
+            <div className="min-w-0">
+              <div className="text-[10px] uppercase tracking-wider text-gray-500 font-semibold">
+                IP LAN (Direct Port)
+              </div>
+              {access.lanUrl ? (
+                <a
+                  href={access.lanUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-xs font-mono font-semibold text-emerald-400 hover:underline flex items-center gap-1 truncate"
+                >
+                  <span className="truncate">{access.lanUrl}</span>
+                  <ExternalLink className="w-3 h-3 shrink-0" />
+                </a>
+              ) : (
+                <span className="text-xs font-mono text-gray-500">Port host belum di-map</span>
+              )}
+            </div>
+            {access.lanUrl && (
+              <button
+                onClick={() => handleCopyAccessUrl('lan', access.lanUrl!)}
+                className="p-1.5 rounded hover:bg-card text-gray-400 hover:text-foreground shrink-0"
+                title="Salin URL IP LAN"
+              >
+                {copiedAccessKey === 'lan' ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
+              </button>
+            )}
+          </div>
+
+          {/* Tailscale IP + Port */}
+          <div className="flex items-center justify-between gap-2 px-3 py-2.5 rounded-lg bg-background border border-border">
+            <div className="min-w-0">
+              <div className="text-[10px] uppercase tracking-wider text-gray-500 font-semibold">
+                IP Tailscale (Remote)
+              </div>
+              {access.tailscaleUrl ? (
+                <a
+                  href={access.tailscaleUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-xs font-mono font-semibold text-sky-400 hover:underline flex items-center gap-1 truncate"
+                >
+                  <span className="truncate">{access.tailscaleUrl}</span>
+                  <ExternalLink className="w-3 h-3 shrink-0" />
+                </a>
+              ) : (
+                <span className="text-xs font-mono text-gray-500">Tailscale IP tidak dikonfigurasi</span>
+              )}
+            </div>
+            {access.tailscaleUrl && (
+              <button
+                onClick={() => handleCopyAccessUrl('ts', access.tailscaleUrl!)}
+                className="p-1.5 rounded hover:bg-card text-gray-400 hover:text-foreground shrink-0"
+                title="Salin URL Tailscale"
+              >
+                {copiedAccessKey === 'ts' ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
+              </button>
+            )}
+          </div>
+        </div>
+
+        {domainSyncMsg && (
+          <p className="mt-2.5 text-[11px] font-mono text-indigo-400">
+            {domainSyncMsg}
+          </p>
+        )}
       </div>
 
       {/* Tabs Header */}

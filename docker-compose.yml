@@ -77,7 +77,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-wokeh123}
       NEXTCLOUD_ADMIN_USER: ${NEXTCLOUD_ADMIN_USER:-fadb}
       NEXTCLOUD_ADMIN_PASSWORD: ${NEXTCLOUD_ADMIN_PASSWORD:-wokeh123}
-      NEXTCLOUD_TRUSTED_DOMAINS: "${SERVER_LAN_IP:-192.168.25.105} ${SERVER_TS_IP:-100.78.113.53} localhost 127.0.0.1"
+      NEXTCLOUD_TRUSTED_DOMAINS: "${SERVER_LAN_IP:-192.168.25.105} ${SERVER_TS_IP:-100.78.113.53} nextcloud.homelab localhost 127.0.0.1"
       REDIS_HOST: redis
       PHP_MEMORY_LIMIT: 1G
       PHP_UPLOAD_LIMIT: 2G
@@ -197,6 +197,8 @@ services:
     environment:
       APP_ENV: production
       HOST_IP: 0.0.0.0
+      SERVER_LAN_IP: ${SERVER_LAN_IP:-192.168.25.105}
+      SERVER_TS_IP: ${SERVER_TS_IP:-100.78.113.53}
       PORT: 8000
       PAP_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-fadb}:${POSTGRES_PASSWORD:-wokeh123}@postgres:5432/pap_core
       PSM_DATABASE_HOST: postgres
@@ -214,7 +216,12 @@ services:
       MQTT_PORT: 1883
       PSM_API_URL: http://psm-api:8000
       JWT_SECRET: ${JWT_SECRET:-super_secret_pap_jwt_signing_key_production_2026_homelab_core}
-      CORS_ORIGINS: "http://${SERVER_LAN_IP:-192.168.25.105}:3000,http://${SERVER_LAN_IP:-192.168.25.105}:3001,http://${SERVER_LAN_IP:-192.168.25.105}:3005,http://${SERVER_LAN_IP:-192.168.25.105}:8000,http://${SERVER_LAN_IP:-192.168.25.105}:8001,http://${SERVER_LAN_IP:-192.168.25.105}:8080,http://${SERVER_LAN_IP:-192.168.25.105}:8081,http://${SERVER_TS_IP:-100.78.113.53}:3000,http://${SERVER_TS_IP:-100.78.113.53}:3001,http://${SERVER_TS_IP:-100.78.113.53}:3005,http://${SERVER_TS_IP:-100.78.113.53}:8000,http://${SERVER_TS_IP:-100.78.113.53}:8001,http://${SERVER_TS_IP:-100.78.113.53}:8080,http://${SERVER_TS_IP:-100.78.113.53}:8081,http://localhost:3000,http://localhost:3005,http://localhost:8000,http://localhost:8001"
+      CORS_ORIGINS: "http://homelab,http://api.homelab,http://psm.homelab,http://psm-api.homelab,http://${SERVER_LAN_IP:-192.168.25.105}:3000,http://${SERVER_LAN_IP:-192.168.25.105}:3001,http://${SERVER_LAN_IP:-192.168.25.105}:3005,http://${SERVER_LAN_IP:-192.168.25.105}:8000,http://${SERVER_LAN_IP:-192.168.25.105}:8001,http://${SERVER_LAN_IP:-192.168.25.105}:8080,http://${SERVER_LAN_IP:-192.168.25.105}:8081,http://${SERVER_TS_IP:-100.78.113.53}:3000,http://${SERVER_TS_IP:-100.78.113.53}:3001,http://${SERVER_TS_IP:-100.78.113.53}:3005,http://${SERVER_TS_IP:-100.78.113.53}:8000,http://${SERVER_TS_IP:-100.78.113.53}:8001,http://${SERVER_TS_IP:-100.78.113.53}:8080,http://${SERVER_TS_IP:-100.78.113.53}:8081,http://localhost:3000,http://localhost:3005,http://localhost:8000,http://localhost:8001"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./router:/app/router
+      - ./dns:/app/dns
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
       interval: 15s
@@ -238,6 +245,8 @@ services:
     environment:
       ENVIRONMENT: production
       DEBUG: "false"
+      SERVER_LAN_IP: ${SERVER_LAN_IP:-192.168.25.105}
+      SERVER_TS_IP: ${SERVER_TS_IP:-100.78.113.53}
       POSTGRES_DB: psm
       POSTGRES_USER: ${POSTGRES_USER:-fadb}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-wokeh123}
@@ -304,12 +313,49 @@ services:
     ports:
       - "3005:3005"
     environment:
+      SERVER_LAN_IP: ${SERVER_LAN_IP:-192.168.25.105}
+      SERVER_TS_IP: ${SERVER_TS_IP:-100.78.113.53}
       INTERNAL_API_URL: http://psm-api:8000
       NEXT_PUBLIC_API_URL: http://${SERVER_LAN_IP:-192.168.25.105}:8001
       NEXT_PUBLIC_WS_URL: ws://${SERVER_LAN_IP:-192.168.25.105}:8001
     depends_on:
       psm-api:
         condition: service_healthy
+    networks:
+      - homelab
+
+  # =============================================================================
+  # INGRESS ROUTER (PORT 80) & LOCAL DNS (PORT 53)
+  # =============================================================================
+  homelab-router:
+    image: nginx:alpine
+    container_name: homelab_router
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./router/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./router/conf.d:/etc/nginx/conf.d:ro
+      - ./router/entrypoint.sh:/usr/local/bin/router-entrypoint.sh:ro
+    entrypoint: ["/bin/sh", "-c", "tr -d '\\r' < /usr/local/bin/router-entrypoint.sh > /tmp/ep.sh && exec /bin/sh /tmp/ep.sh"]
+    networks:
+      - homelab
+
+  homelab-dns:
+    image: coredns/coredns:latest
+    container_name: homelab_dns
+    restart: unless-stopped
+    command: -conf /etc/coredns/Corefile
+    environment:
+      SERVER_LAN_IP: ${SERVER_LAN_IP:-192.168.25.105}
+      SERVER_TS_IP: ${SERVER_TS_IP:-100.78.113.53}
+    ports:
+      - "${SERVER_LAN_IP:-192.168.25.105}:53:53/udp"
+      - "${SERVER_LAN_IP:-192.168.25.105}:53:53/tcp"
+    volumes:
+      - ./dns:/etc/coredns:ro
     networks:
       - homelab
 

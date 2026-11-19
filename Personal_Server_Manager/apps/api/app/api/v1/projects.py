@@ -1,8 +1,10 @@
 import os
+import re
 from datetime import datetime, timezone
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
+from apps.api.app.core.config import settings
 from apps.api.app.database.session import get_db
 from apps.api.app.core.security import encrypt_secret, decrypt_secret
 from apps.api.app.core.dependencies import get_current_user, require_role
@@ -29,7 +31,14 @@ from apps.api.app.schemas.all_schemas import (
     ContainerResponse,
 )
 from apps.api.app.services.audit_service import log_activity
-from apps.api.app.services.pap_client import sync_psm_to_pap
+from apps.api.app.services.pap_client import (
+    extract_host_port,
+    remove_domain_routing,
+    resolve_effective_domain,
+    sync_all_project_domains,
+    sync_domain_routing,
+    sync_psm_to_pap,
+)
 from apps.api.app.services.job_service import create_and_dispatch_job
 from apps.api.app.services.github_service import get_stored_token
 from apps.api.app.services.db_provision_service import (
@@ -67,38 +76,64 @@ def sanitize_git_url_and_branch(repo_url: Optional[str], branch: Optional[str]) 
         clean_url = clean_url.rstrip("/") + ".git"
     return clean_url, (clean_branch or "main")
 
+_IPV4_RE = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}$")
+
+
+def _resolve_server_ips(server: Optional[Server]) -> Tuple[str, Optional[str]]:
+    """Return (lan_ip, tailscale_ip) avoiding container hostnames or loopback."""
+    hostname = (server.hostname or "").strip() if server else ""
+    if hostname and _IPV4_RE.match(hostname) and hostname not in ("127.0.0.1", "0.0.0.0"):
+        lan_ip = hostname
+    else:
+        lan_ip = settings.SERVER_LAN_IP
+    ts_ip = settings.SERVER_TS_IP or None
+    return lan_ip, ts_ip
+
+
+def _build_project_response(p: Project, deployment_id: Optional[str] = None) -> ProjectResponse:
+    src = p.source
+    lan_ip, ts_ip = _resolve_server_ips(p.server)
+    port_mappings = p.port_mappings or "3000:3000"
+    host_port = extract_host_port(port_mappings)
+    effective_domain = resolve_effective_domain(p.domain, p.name)
+    access_urls: Dict[str, Optional[str]] = {
+        "domain": f"http://{effective_domain}",
+        "lan_ip": f"http://{lan_ip}:{host_port}" if host_port else None,
+        "tailscale_ip": f"http://{ts_ip}:{host_port}" if (ts_ip and host_port) else None,
+    }
+    return ProjectResponse(
+        id=p.id,
+        server_id=p.server_id,
+        server_name=p.server.name if p.server else "Unknown Server",
+        owner_id=p.owner_id,
+        name=p.name,
+        description=p.description,
+        framework=p.framework,
+        source_type=p.source_type,
+        status=p.status,
+        repository_url=src.repository_url if src else None,
+        branch=src.branch if src else None,
+        dockerfile_path=src.dockerfile_path if src else None,
+        compose_path=src.compose_path if src else None,
+        port_mappings=port_mappings,
+        domain=effective_domain,
+        db_type=p.db_type or "none",
+        db_name=p.db_name,
+        server_ip=lan_ip,
+        server_tailscale_ip=ts_ip,
+        access_urls=access_urls,
+        deployment_id=deployment_id,
+        created_at=p.created_at,
+    )
+
+
 @router.get("", response_model=List[ProjectResponse])
 def list_projects(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     projects = db.query(Project).order_by(Project.created_at.desc()).all()
-    result = []
-    for p in projects:
-        src = p.source
-        result.append(
-            ProjectResponse(
-                id=p.id,
-                server_id=p.server_id,
-                server_name=p.server.name if p.server else "Unknown Server",
-                owner_id=p.owner_id,
-                name=p.name,
-                description=p.description,
-                framework=p.framework,
-                source_type=p.source_type,
-                status=p.status,
-                repository_url=src.repository_url if src else None,
-                branch=src.branch if src else None,
-                dockerfile_path=src.dockerfile_path if src else None,
-                compose_path=src.compose_path if src else None,
-                port_mappings=p.port_mappings or "3000:3000",
-                domain=p.domain,
-                db_type=p.db_type or "none",
-                db_name=p.db_name,
-                created_at=p.created_at
-            )
-        )
-    return result
+    return [_build_project_response(p) for p in projects]
 
 @router.get("/next-port")
 def get_next_available_port(
@@ -107,26 +142,23 @@ def get_next_available_port(
     """Detects active and reserved ports in the homelab and returns a safe, unallocated host port."""
     import socket
 
-    # Homelab core system reserved ports
+    # Homelab core system reserved ports matching docker-compose.yml
     reserved_ports = {
         53: "CoreDNS (:53)",
         80: "Nginx Ingress Router (:80)",
         1883: "Mosquitto MQTT (:1883)",
-        3000: "PSM Web Internal (:3000)",
-        3001: "Grafana Utama (:3001)",
-        3002: "Uptime Kuma (:3002)",
+        3000: "Grafana (:3000)",
+        3001: "Uptime Kuma (:3001)",
         3005: "PSM Console Web (:3005)",
-        3306: "MySQL Server (:3306)",
-        5001: "Homelab Registry (:5001)",
-        5432: "PostgreSQL Server (:5432)",
+        3306: "MySQL 8.4 (:3306)",
+        5432: "PostgreSQL 16 (:5432)",
+        6379: "Redis 7 (:6379)",
         8000: "PAP Core API Gateway (:8000)",
-        8001: "PAP Core Web UI (:8001)",
-        8080: "Vaultwarden (:8080)",
-        8081: "Apache Web (:8081)",
-        8086: "InfluxDB TSDB (:8086)",
-        8088: "HeatpressHub Web (:8088)",
-        9001: "Prometheus Server (:9001)",
-        9090: "Cockpit Console (:9090)",
+        8001: "PSM Control Plane API (:8001)",
+        8080: "Nextcloud (:8080)",
+        8081: "cAdvisor (:8081)",
+        9090: "Prometheus (:9090)",
+        9100: "Node Exporter (:9100)",
     }
 
     # Query all ports currently mapped in projects database
@@ -165,6 +197,15 @@ def get_next_available_port(
     }
 
 
+@router.post("/sync-domains")
+def sync_all_domains_endpoint(
+    current_user: User = Depends(require_role("owner", "admin", "operator")),
+    db: Session = Depends(get_db)
+):
+    """Synchronize all registered projects' domains and virtual hosts to PAP DNS & Ingress Router."""
+    return sync_all_project_domains(db)
+
+
 @router.post("", response_model=ProjectResponse)
 async def create_project(
     payload: ProjectCreate,
@@ -175,9 +216,7 @@ async def create_project(
     if not server:
         raise HTTPException(status_code=404, detail="Target server not found")
 
-    import re
-    clean_slug = re.sub(r"[^a-zA-Z0-9-]", "-", payload.name.lower().strip()).strip("-")
-    project_domain = payload.domain.strip().lower() if payload.domain else f"{clean_slug}.homelab"
+    project_domain = resolve_effective_domain(payload.domain, payload.name)
     project_db_type = getattr(payload, "db_type", "postgres") or "none"
 
     project = Project(
@@ -336,27 +375,7 @@ async def create_project(
         }
     )
 
-    return ProjectResponse(
-        id=project.id,
-        server_id=project.server_id,
-        server_name=server.name,
-        owner_id=project.owner_id,
-        name=project.name,
-        description=project.description,
-        framework=project.framework,
-        source_type=project.source_type,
-        status=project.status,
-        repository_url=source.repository_url,
-        branch=source.branch,
-        dockerfile_path=source.dockerfile_path,
-        compose_path=source.compose_path,
-        port_mappings=project.port_mappings or "3000:3000",
-        domain=project.domain,
-        db_type=project.db_type or "none",
-        db_name=project.db_name,
-        deployment_id=deployment_id,
-        created_at=project.created_at
-    )
+    return _build_project_response(project, deployment_id=deployment_id)
 
 @router.get("/{project_id}", response_model=ProjectResponse)
 def get_project(
@@ -367,27 +386,7 @@ def get_project(
     p = db.query(Project).filter(Project.id == project_id).first()
     if not p:
         raise HTTPException(status_code=404, detail="Project not found")
-    src = p.source
-    return ProjectResponse(
-        id=p.id,
-        server_id=p.server_id,
-        server_name=p.server.name if p.server else "Unknown Server",
-        owner_id=p.owner_id,
-        name=p.name,
-        description=p.description,
-        framework=p.framework,
-        source_type=p.source_type,
-        status=p.status,
-        repository_url=src.repository_url if src else None,
-        branch=src.branch if src else None,
-        dockerfile_path=src.dockerfile_path if src else None,
-        compose_path=src.compose_path if src else None,
-        port_mappings=p.port_mappings or "3000:3000",
-        domain=p.domain,
-        db_type=p.db_type or "none",
-        db_name=p.db_name,
-        created_at=p.created_at
-    )
+    return _build_project_response(p)
 
 async def execute_project_redeploy(
     db: Session,
@@ -494,6 +493,14 @@ async def execute_project_redeploy(
             detail="Project tidak memiliki repositori Git maupun file archive ZIP yang tersimpan di server. Silakan deploy rilis baru dengan Git atau upload file ZIP terlebih dahulu."
         )
 
+    # Ensure DNS & Ingress Virtual Host routing is synchronized on every redeploy
+    try:
+        eff_domain = resolve_effective_domain(project.domain, project.name)
+        hp = extract_host_port(project.port_mappings)
+        sync_domain_routing(domain=eff_domain, target_port=hp, project_name=project.name)
+    except Exception:
+        pass
+
     job = await create_and_dispatch_job(
         db=db,
         server_id=project.server_id,
@@ -539,6 +546,8 @@ async def update_project(
     if not p:
         raise HTTPException(status_code=404, detail="Project not found")
 
+    old_domain = resolve_effective_domain(p.domain, p.name)
+
     if payload.name is not None:
         p.name = payload.name
     if payload.description is not None:
@@ -548,7 +557,7 @@ async def update_project(
     if payload.port_mappings is not None:
         p.port_mappings = payload.port_mappings
     if payload.domain is not None:
-        p.domain = payload.domain.strip().lower() if payload.domain else None
+        p.domain = resolve_effective_domain(payload.domain, p.name) if payload.domain.strip() else None
     if payload.db_type is not None:
         p.db_type = payload.db_type
         # Immediately re-provision and sync environment variables when database engine is updated
@@ -585,16 +594,13 @@ async def update_project(
     db.refresh(p)
 
     # Sync DNS & Ingress Routing if domain or ports changed
-    if p.domain and (payload.port_mappings is not None or payload.domain is not None):
+    new_domain = resolve_effective_domain(p.domain, p.name)
+    if payload.port_mappings is not None or payload.domain is not None:
         try:
-            from apps.api.app.services.pap_client import sync_domain_routing
-            hp = 3000
-            if p.port_mappings and ":" in p.port_mappings:
-                try:
-                    hp = int(p.port_mappings.split(":")[0].strip())
-                except Exception:
-                    hp = 3000
-            sync_domain_routing(domain=p.domain, target_port=hp, project_name=p.name)
+            if old_domain and old_domain != new_domain:
+                remove_domain_routing(old_domain)
+            hp = extract_host_port(p.port_mappings)
+            sync_domain_routing(domain=new_domain, target_port=hp, project_name=p.name)
         except Exception:
             pass
 
@@ -614,10 +620,40 @@ async def update_project(
         except Exception:
             pass
 
-    resp = get_project(project_id=project_id, current_user=current_user, db=db)
-    if deployment_id:
-        resp.deployment_id = deployment_id
-    return resp
+    return _build_project_response(p, deployment_id=deployment_id)
+
+
+@router.post("/{project_id}/sync-domain")
+def sync_project_domain_endpoint(
+    project_id: str,
+    current_user: User = Depends(require_role("owner", "admin", "operator")),
+    db: Session = Depends(get_db)
+):
+    """Synchronize this project's domain virtual host route to PAP DNS & Ingress Router."""
+    p = db.query(Project).filter(Project.id == project_id).first()
+    if not p:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    eff_domain = resolve_effective_domain(p.domain, p.name)
+    if p.domain != eff_domain:
+        p.domain = eff_domain
+        db.commit()
+        db.refresh(p)
+
+    hp = extract_host_port(p.port_mappings)
+    synced = sync_domain_routing(domain=eff_domain, target_port=hp, project_name=p.name)
+    resp = _build_project_response(p)
+    return {
+        "success": synced,
+        "domain": eff_domain,
+        "target_port": hp,
+        "access_urls": resp.access_urls,
+        "message": (
+            f"Domain '{eff_domain}' disinkronkan ke port {hp}."
+            if synced
+            else f"Route lokal disiapkan untuk '{eff_domain}' -> port {hp}."
+        ),
+    }
 
 
 @router.post("/{project_id}/redeploy", response_model=DeploymentResponse)
@@ -646,11 +682,10 @@ def delete_project(
         raise HTTPException(status_code=404, detail="Project not found")
 
     # Remove Local DNS & Ingress Routing
-    if p.domain:
+    eff_domain = resolve_effective_domain(p.domain, p.name)
+    if eff_domain:
         try:
-            # pyrefly: ignore[missing-import]
-            from app.modules.dns.service import DnsService
-            DnsService.remove_domain_route(p.domain)
+            remove_domain_routing(eff_domain)
         except Exception:
             pass
 

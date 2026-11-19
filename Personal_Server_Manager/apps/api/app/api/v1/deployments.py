@@ -30,6 +30,11 @@ from apps.api.app.services.audit_service import log_activity
 from apps.api.app.services.job_service import create_and_dispatch_job
 from apps.api.app.services.db_provision_service import provision_and_sync_project_db
 from apps.api.app.services.github_service import get_stored_token
+from apps.api.app.services.pap_client import (
+    extract_host_port,
+    resolve_effective_domain,
+    sync_domain_routing,
+)
 
 router = APIRouter(prefix="/deployments", tags=["Deployment Center"])
 
@@ -80,9 +85,12 @@ async def create_git_deployment(
     if not src or not src.repository_url:
         raise HTTPException(status_code=400, detail="Project does not have a Git repository configured")
 
-    # Update port_mappings, db_type, and env vars if provided in deploy payload
+    # Update port_mappings, domain, db_type, and env vars if provided in deploy payload
     if payload.port_mappings:
         project.port_mappings = payload.port_mappings.strip()
+
+    if payload.domain and payload.domain.strip():
+        project.domain = resolve_effective_domain(payload.domain, project.name)
 
     if payload.db_type:
         project.db_type = payload.db_type.strip().lower()
@@ -149,6 +157,13 @@ async def create_git_deployment(
         )
     )
     db.commit()
+
+    try:
+        eff_domain = resolve_effective_domain(project.domain, project.name)
+        hp = extract_host_port(project.port_mappings)
+        sync_domain_routing(domain=eff_domain, target_port=hp, project_name=project.name)
+    except Exception:
+        pass
 
     # Dispatch job to target server agent
     job_payload = {
@@ -336,6 +351,13 @@ async def finalize_zip_upload(
 
     # Auto-provision & auto-connect database for ZIP deployment (respecting explicit db_type and overriding conflicting env)
     db_info, env_vars = provision_and_sync_project_db(db, project, db_type=project.db_type, override_existing_env=True)
+
+    try:
+        eff_domain = resolve_effective_domain(project.domain, project.name)
+        hp = extract_host_port(project.port_mappings)
+        sync_domain_routing(domain=eff_domain, target_port=hp, project_name=project.name)
+    except Exception:
+        pass
 
     job_payload = {
         "deployment_id": deployment.id,

@@ -319,6 +319,17 @@ export const api = {
     return res.json();
   },
 
+  async syncProjectDomain(id: string) {
+    const res = await fetchWithAuth(`/api/v1/projects/${id}/sync-domain`, {
+      method: 'POST',
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || 'Failed to synchronize project domain route');
+    }
+    return res.json();
+  },
+
   async deleteProject(id: string) {
     const res = await fetchWithAuth(`/api/v1/projects/${id}`, { method: 'DELETE' });
     return res.json();

@@ -106,7 +106,7 @@ DEFAULT_IOT_FLEET_FALLBACK: Dict[str, Any] = {
 
 
 def _candidate_urls() -> List[str]:
-    configured = (settings.PAP_API_URL or "http://192.168.25.101:8000").rstrip("/")
+    configured = (settings.PAP_API_URL or f"http://{settings.SERVER_LAN_IP}:8000").rstrip("/")
     candidates = [
         "http://pap-api:8000",
         "http://127.0.0.1:8000",
@@ -230,6 +230,37 @@ def sync_psm_to_pap(db: Session) -> Dict[str, Any]:
     }
 
 
+def extract_host_port(port_mappings: Optional[str]) -> int:
+    """Extract the first host port integer from a Docker port mapping string (e.g. '3100:80')."""
+    if port_mappings:
+        first_mapping = port_mappings.split(",")[0].strip()
+        if ":" in first_mapping:
+            try:
+                return int(first_mapping.split(":")[0].strip())
+            except Exception:
+                pass
+        elif first_mapping.isdigit():
+            return int(first_mapping)
+    return 3000
+
+
+def resolve_effective_domain(domain: Optional[str], project_name: str) -> str:
+    """Resolve an effective local domain for a project, normalizing bare slugs to .homelab."""
+    import re
+
+    raw = (domain or "").strip().lower()
+    if not raw:
+        clean_slug = re.sub(r"[^a-zA-Z0-9-]", "-", (project_name or "app").lower().strip()).strip("-") or "app"
+        return f"{clean_slug}.homelab"
+    raw = re.sub(r"^https?://", "", raw).split("/")[0].split(":")[0]
+    raw = re.sub(r"[^a-z0-9.-]", "-", raw).strip(".-")
+    if not raw:
+        return "app.homelab"
+    if "." not in raw:
+        return f"{raw}.homelab"
+    return raw
+
+
 def sync_domain_routing(domain: str, target_port: int, project_name: Optional[str] = None) -> bool:
     """Register or update domain route with PAP DNS & Ingress Router."""
     if not domain:
@@ -253,6 +284,54 @@ def sync_domain_routing(domain: str, target_port: int, project_name: Optional[st
     except Exception:
         pass
     return False
+
+
+def remove_domain_routing(domain: str) -> bool:
+    """Remove domain virtual host route from PAP DNS & Ingress Router."""
+    if not domain:
+        return False
+    from urllib.parse import quote
+
+    resp = request_pap("DELETE", f"/api/v1/dns/records/{quote(domain, safe='')}", timeout=2.0)
+    if resp is not None and resp.status_code in (200, 204):
+        return True
+
+    try:
+        from app.modules.dns.service import DnsService
+        return DnsService.remove_domain_route(domain)
+    except Exception:
+        return False
+
+
+def sync_all_project_domains(db: Session) -> Dict[str, Any]:
+    """Synchronize all project domain routes to PAP DNS & Ingress Router."""
+    projects = db.query(Project).all()
+    synced = 0
+    failed = 0
+    domains: List[Dict[str, Any]] = []
+
+    for p in projects:
+        eff_domain = resolve_effective_domain(p.domain, p.name)
+        hp = extract_host_port(p.port_mappings)
+        ok = sync_domain_routing(domain=eff_domain, target_port=hp, project_name=p.name)
+        if ok:
+            synced += 1
+        else:
+            failed += 1
+        domains.append({
+            "project_id": p.id,
+            "project_name": p.name,
+            "domain": eff_domain,
+            "target_port": hp,
+            "synced": ok,
+        })
+
+    return {
+        "synced": synced,
+        "failed": failed,
+        "total": len(projects),
+        "domains": domains,
+    }
 
 
 def get_pap_hub_status(db: Session) -> Dict[str, Any]:

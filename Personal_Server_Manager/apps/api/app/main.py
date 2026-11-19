@@ -86,7 +86,7 @@ def init_db():
             local_server = Server(
                 owner_id=admin.id,
                 name="Homelab-Primary",
-                hostname="ubuntu-homelab.local",
+                hostname=settings.SERVER_LAN_IP,
                 description="Primary Ubuntu Server (HomeLab)",
                 os_name="Ubuntu Server",
                 os_version="24.04 LTS",
@@ -191,6 +191,10 @@ def init_db():
         else:
             primary_srv = db.query(Server).filter(Server.name == "Homelab-Primary").first()
             if primary_srv:
+                import re
+                if not primary_srv.hostname or not re.match(r"^\d{1,3}(?:\.\d{1,3}){3}$", primary_srv.hostname.strip()):
+                    primary_srv.hostname = settings.SERVER_LAN_IP
+                    db.commit()
                 default_agent_token = os.getenv("HOMELAB_AGENT_TOKEN", "psm_agent_homelab_default_token")
                 tok_hash = hash_token(default_agent_token)
                 existing_tok = db.query(AgentToken).filter(
@@ -204,12 +208,36 @@ def init_db():
     finally:
         db.close()
 
+
+async def _startup_sync_project_domains() -> None:
+    import asyncio
+    from apps.api.app.services.pap_client import sync_all_project_domains
+
+    for delay in (3, 5, 5):
+        await asyncio.sleep(delay)
+        db = db_session.SessionLocal()
+        try:
+            res = sync_all_project_domains(db)
+            if res.get("total", 0) == 0 or res.get("synced", 0) > 0:
+                return
+        except Exception:
+            pass
+        finally:
+            db.close()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    import asyncio
     # Startup
     init_db()
+    sync_task = None
+    if os.getenv("TESTING") != "true":
+        sync_task = asyncio.create_task(_startup_sync_project_domains())
     yield
     # Shutdown
+    if sync_task and not sync_task.done():
+        sync_task.cancel()
 
 app = FastAPI(
     title=settings.PROJECT_NAME,

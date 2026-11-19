@@ -257,3 +257,62 @@ def test_iot_platform_machines_and_production_api(client: TestClient, db_session
     assert s_data["total_machines"] >= 3
     assert s_data["total_output_pieces_today"] > 0
     assert "fleet_efficiency_percent" in s_data
+
+
+def test_local_dns_service_and_private_domains(monkeypatch, tmp_path):
+    """Tests DnsService sanitize_domain, register_domain_route, list_domains, remove_domain_route, and hosts export."""
+    from app.modules.dns.service import DnsService
+
+    monkeypatch.setenv("DNS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("HOST_IP", "0.0.0.0")
+    monkeypatch.setenv("SERVER_LAN_IP", "192.168.25.105")
+    monkeypatch.setenv("SERVER_TS_IP", "100.78.113.53")
+
+    # 1. Domain sanitization preserves dots and appends .homelab to bare names
+    assert DnsService.sanitize_domain("pos-main") == "pos-main.homelab"
+    assert DnsService.sanitize_domain("http://pos.main.homelab/") == "pos.main.homelab"
+    assert DnsService.sanitize_domain("pos.toko.my.id") == "pos.toko.my.id"
+
+    # 2. Register virtual host route
+    reg = DnsService.register_domain_route(
+        domain="pos-main.homelab",
+        target_port=3100,
+        target_host="host.docker.internal",
+        project_name="pos-main",
+    )
+    assert reg["success"] is True
+    assert reg["domain"] == "pos-main.homelab"
+    assert reg["lan_ip"] == "192.168.25.105"
+
+    vhost_file = tmp_path / "router" / "conf.d" / "projects" / "pos-main.homelab.conf"
+    assert vhost_file.exists()
+    vhost_text = vhost_file.read_text(encoding="utf-8")
+    assert "server_name pos-main.homelab;" in vhost_text
+    assert "proxy_pass http://host.docker.internal:3100;" in vhost_text
+
+    # Registering again is idempotent in homelab.hosts and never writes 0.0.0.0
+    DnsService.register_domain_route(domain="pos-main.homelab", target_port=3100, project_name="pos-main")
+    hosts_file = tmp_path / "dns" / "homelab.hosts"
+    hosts_text = hosts_file.read_text(encoding="utf-8")
+    assert "0.0.0.0" not in hosts_text
+    matches = [ln for ln in hosts_text.splitlines() if ln.strip().endswith(" pos-main.homelab")]
+    assert len(matches) == 1
+    assert matches[0].startswith("192.168.25.105")
+
+    # 3. list_domains includes both built-in services and registered project domains
+    domains = DnsService.list_domains()
+    domain_names = {d["domain"] for d in domains}
+    assert "psm.homelab" in domain_names
+    assert "pos-main.homelab" in domain_names
+
+    # 4. Hosts export includes LAN and Tailscale entries
+    exported = DnsService.generate_hosts_file_content()
+    assert "192.168.25.105" in exported
+    assert "100.78.113.53" in exported
+    assert "pos-main.homelab" in exported
+
+    # 5. Remove route cleans up config and hosts entry
+    assert DnsService.remove_domain_route("pos-main.homelab") is True
+    assert not vhost_file.exists()
+    hosts_after = hosts_file.read_text(encoding="utf-8")
+    assert not any(ln.strip().endswith(" pos-main.homelab") for ln in hosts_after.splitlines())

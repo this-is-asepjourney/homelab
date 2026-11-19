@@ -25,8 +25,10 @@ import {
   Sparkles,
   AlertTriangle,
   RefreshCw,
+  Globe,
 } from 'lucide-react';
 import { api, formatDuration, getWsBase } from '../../../lib/api';
+import { resolveProjectAccess } from '../../../lib/utils';
 import { DeployProjectModal } from '../../../components/deploy-project-modal';
 
 interface PipelineStage {
@@ -311,25 +313,18 @@ export default function DeploymentDetailPage() {
     });
   }, [logs, logFilter, searchQuery]);
 
-  // Extract application endpoint URL
-  const appEndpoint = useMemo(() => {
-    const hostIp = typeof window !== 'undefined' ? window.location.hostname : '192.168.25.101';
-    if (project?.domain && !project.domain.includes('homelab')) {
-      return `http://${project.domain}`;
-    }
-    const mapping = deployment?.port_mappings || project?.port_mappings;
-    if (mapping) {
-      const firstPair = mapping.split(',')[0].trim();
-      const hostPort = firstPair.split(':')[0].trim();
-      if (hostPort && !isNaN(Number(hostPort))) {
-        return `http://${hostIp}:${hostPort}`;
-      }
-    }
-    if (project?.domain) {
-      return `http://${project.domain}`;
-    }
-    return null;
+  // Extract application domain and IP:Port access URLs
+  const accessInfo = useMemo(() => {
+    if (!project && !deployment) return null;
+    const mergedProject = {
+      ...(project || {}),
+      name: project?.name || deployment?.project_name || 'app',
+      port_mappings: deployment?.port_mappings || project?.port_mappings,
+    };
+    return resolveProjectAccess(mergedProject, []);
   }, [project, deployment]);
+
+  const appEndpoint = accessInfo?.lanUrl || accessInfo?.domainUrl || null;
 
   // Automated Root Cause & Failure Diagnosis
   const failureDiagnosis = useMemo<{
@@ -476,15 +471,32 @@ export default function DeploymentDetailPage() {
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
+          {accessInfo?.domainUrl && deployment?.status === 'success' && (
+            <a
+              href={accessInfo.domainUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-indigo-500/30 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 text-xs font-semibold transition-all shadow-sm"
+            >
+              <Globe className="w-3.5 h-3.5" />
+              <span>{accessInfo.domain}</span>
+              <ExternalLink className="w-3 h-3" />
+            </a>
+          )}
+
           {appEndpoint && deployment?.status === 'success' && (
             <a
               href={appEndpoint}
               target="_blank"
               rel="noopener noreferrer"
-              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-all shadow-md shadow-emerald-600/20"
+              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold font-mono transition-all shadow-md shadow-emerald-600/20"
             >
               <ExternalLink className="w-3.5 h-3.5" />
-              <span>Buka Aplikasi</span>
+              <span>
+                {accessInfo?.lanUrl && accessInfo?.hostPort
+                  ? `${accessInfo.lanIp}:${accessInfo.hostPort}`
+                  : 'Buka Aplikasi'}
+              </span>
             </a>
           )}
 
