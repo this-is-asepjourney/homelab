@@ -181,8 +181,8 @@ services:
   # =============================================================================
   pap-api:
     build:
-      context: ./Personal_Api_Platform
-      dockerfile: docker/Dockerfile
+      context: .
+      dockerfile: Personal_Api_Platform/docker/Dockerfile
     container_name: pap-api
     restart: unless-stopped
     depends_on:
