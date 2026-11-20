@@ -305,6 +305,8 @@ def get_next_available_port(
         8001: "PSM Control Plane API (:8001)",
         8080: "Nextcloud (:8080)",
         8081: "cAdvisor (:8081)",
+        9000: "MinIO S3 API (:9000)",
+        9002: "MinIO Web Console (:9002)",
         9090: "Prometheus (:9090)",
         9100: "Node Exporter (:9100)",
     }

@@ -105,6 +105,8 @@ DEFAULT_HOSTS_TEMPLATE = """# Homelab Local DNS Static Hosts Mapping
 192.168.25.105 kuma.homelab
 192.168.25.105 uptime.homelab
 192.168.25.105 cadvisor.homelab
+192.168.25.105 minio.homelab
+192.168.25.105 s3.homelab
 
 100.78.113.53 api.tailscale.homelab
 100.78.113.53 psm.tailscale.homelab
@@ -114,6 +116,8 @@ DEFAULT_HOSTS_TEMPLATE = """# Homelab Local DNS Static Hosts Mapping
 100.78.113.53 prometheus.tailscale.homelab
 100.78.113.53 kuma.tailscale.homelab
 100.78.113.53 cadvisor.tailscale.homelab
+100.78.113.53 minio.tailscale.homelab
+100.78.113.53 s3.tailscale.homelab
 """
 
 BUILTIN_SERVICES = [
@@ -126,6 +130,8 @@ BUILTIN_SERVICES = [
     {"domain": "prometheus.homelab", "target": "prometheus:9090", "type": "Metrics", "desc": "Prometheus TSDB"},
     {"domain": "kuma.homelab", "target": "uptime-kuma:3001", "type": "Health Check", "desc": "Uptime Kuma Hub"},
     {"domain": "cadvisor.homelab", "target": "cadvisor:8080", "type": "Container Metrics", "desc": "cAdvisor Container Inspector"},
+    {"domain": "minio.homelab", "target": "minio:9001", "type": "Object Storage", "desc": "MinIO Web Console (Image & File Buckets)"},
+    {"domain": "s3.homelab", "target": "minio:9000", "type": "S3 API", "desc": "MinIO S3-Compatible Object Storage API"},
 ]
 
 

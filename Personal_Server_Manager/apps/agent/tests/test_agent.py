@@ -142,5 +142,46 @@ def test_ensure_project_db_explicit_postgres_priority(tmp_path):
     assert "MYSQL_DATABASE" not in merged_env
 
 
+def test_auto_wire_silo_storage_defaults_and_overrides(monkeypatch):
+    monkeypatch.delenv("HOST_IP", raising=False)
+    monkeypatch.delenv("SERVER_LAN_IP", raising=False)
+    monkeypatch.delenv("MINIO_HOST", raising=False)
+    monkeypatch.delenv("MINIO_PORT", raising=False)
+    monkeypatch.delenv("MINIO_ROOT_USER", raising=False)
+    monkeypatch.delenv("MINIO_ROOT_PASSWORD", raising=False)
+
+    # 1. Default wiring when Laravel uses FILESYSTEM_DISK=s3
+    logs = []
+    merged_default = {"FILESYSTEM_DISK": "s3"}
+    DeploymentEngine._auto_wire_silo_storage(
+        project_name="Stock-UMKM",
+        merged_env=merged_default,
+        env_example_hint={"AWS_BUCKET": ""},
+        log_callback=lambda lvl, msg: logs.append((lvl, msg)),
+    )
+    assert merged_default["AWS_BUCKET"] == "stock-umkm"
+    assert merged_default["AWS_ENDPOINT"] == "http://minio:9000"
+    assert merged_default["AWS_URL"] == "http://192.168.25.105:9000/stock-umkm"
+    assert merged_default["AWS_USE_PATH_STYLE_ENDPOINT"] == "true"
+    assert merged_default["AWS_ACCESS_KEY_ID"] == "admin"
+    assert merged_default["AWS_SECRET_ACCESS_KEY"] == "admin12345"
+
+    # 2. Existing user-configured AWS_BUCKET & AWS_URL must be preserved
+    merged_custom = {
+        "FILESYSTEM_DISK": "s3",
+        "AWS_BUCKET": "images",
+        "AWS_URL": "http://100.78.113.53:9000/images",
+    }
+    DeploymentEngine._auto_wire_silo_storage(
+        project_name="Stock-UMKM",
+        merged_env=merged_custom,
+        env_example_hint={"AWS_BUCKET": "ignored-default"},
+        log_callback=lambda lvl, msg: logs.append((lvl, msg)),
+    )
+    assert merged_custom["AWS_BUCKET"] == "images"
+    assert merged_custom["AWS_URL"] == "http://100.78.113.53:9000/images"
+    assert merged_custom["AWS_ENDPOINT"] == "http://minio:9000"
+
+
 
 

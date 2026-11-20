@@ -1,9 +1,10 @@
 import os
-import shutil
-import zipfile
-import subprocess
 import re
+import shlex
+import shutil
+import subprocess
 import time
+import zipfile
 from typing import Callable, Optional, Dict, Any, List, Tuple
 from apps.agent.app.deployment.dockerfile_generator import (
     ensure_dockerfile_and_ignore,
@@ -106,20 +107,23 @@ class DeploymentEngine:
             return
 
         clean_bucket = re.sub(r"[^a-z0-9-]", "-", project_name.lower().strip()).strip("-")
-        minio_host = os.getenv("HOST_IP", "192.168.25.101")
+        public_host = os.getenv("HOST_IP") or os.getenv("SERVER_LAN_IP") or "192.168.25.105"
+        minio_internal_host = os.getenv("MINIO_HOST", "minio")
         minio_port = os.getenv("MINIO_PORT", "9000")
-        target_bucket = env_example_hint.get("AWS_BUCKET") or merged_env.get("AWS_BUCKET") or clean_bucket
+        minio_user = os.getenv("MINIO_ROOT_USER", "admin")
+        minio_password = os.getenv("MINIO_ROOT_PASSWORD", "admin12345")
+        target_bucket = merged_env.get("AWS_BUCKET") or env_example_hint.get("AWS_BUCKET") or clean_bucket
         if not target_bucket:
             target_bucket = clean_bucket
 
         silo_vars = {
             "FILESYSTEM_DISK": "s3",
-            "AWS_ACCESS_KEY_ID": os.getenv("MINIO_ROOT_USER", "admin"),
-            "AWS_SECRET_ACCESS_KEY": os.getenv("MINIO_ROOT_PASSWORD", "admin12345"),
+            "AWS_ACCESS_KEY_ID": minio_user,
+            "AWS_SECRET_ACCESS_KEY": minio_password,
             "AWS_DEFAULT_REGION": "us-east-1",
             "AWS_BUCKET": target_bucket,
-            "AWS_ENDPOINT": env_example_hint.get("AWS_ENDPOINT") or merged_env.get("AWS_ENDPOINT") or f"http://{minio_host}:{minio_port}",
-            "AWS_URL": env_example_hint.get("AWS_URL") or merged_env.get("AWS_URL") or f"http://{minio_host}:{minio_port}/{target_bucket}",
+            "AWS_ENDPOINT": merged_env.get("AWS_ENDPOINT") or env_example_hint.get("AWS_ENDPOINT") or f"http://{minio_internal_host}:{minio_port}",
+            "AWS_URL": merged_env.get("AWS_URL") or env_example_hint.get("AWS_URL") or f"http://{public_host}:{minio_port}/{target_bucket}",
             "AWS_USE_PATH_STYLE_ENDPOINT": "true",
         }
         for k, v in silo_vars.items():
@@ -130,11 +134,20 @@ class DeploymentEngine:
         try:
             import docker
             client = docker.from_env()
-            for mc_cand in ["homelab_minio_init", "homelab_minio", "minio"]:
+            q_user = shlex.quote(minio_user)
+            q_pass = shlex.quote(minio_password)
+            q_bucket = shlex.quote(target_bucket)
+            for mc_cand in ["minio", "homelab_minio", "silo"]:
                 try:
                     mcont = client.containers.get(mc_cand)
                     if mcont.status == "running":
-                        cmd = f"mc mb myminio/{target_bucket} --ignore-existing && mc anonymous set download myminio/{target_bucket}"
+                        cmd = (
+                            "MC=$(command -v mc || command -v mcli); "
+                            "[ -n \"$MC\" ] && "
+                            f"$MC alias set myminio http://127.0.0.1:9000 {q_user} {q_pass} >/dev/null 2>&1 && "
+                            f"$MC mb --ignore-existing myminio/{q_bucket} && "
+                            f"$MC anonymous set download myminio/{q_bucket}"
+                        )
                         mcont.exec_run(["sh", "-c", cmd])
                         break
                 except Exception:
@@ -142,7 +155,11 @@ class DeploymentEngine:
         except Exception:
             pass
 
-        log_callback("info", f"[Storage] Auto-wired Silo / MinIO S3 bucket '{target_bucket}' ({minio_host}:{minio_port}).")
+        log_callback(
+            "info",
+            f"[Storage] Auto-wired Silo / MinIO S3 bucket '{target_bucket}' "
+            f"(endpoint http://{minio_internal_host}:{minio_port}, public http://{public_host}:{minio_port}/{target_bucket}).",
+        )
 
     @staticmethod
     def ensure_project_db(

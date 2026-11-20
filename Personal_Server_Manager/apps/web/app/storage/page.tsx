@@ -35,6 +35,20 @@ export default function StoragePage() {
   const [loading, setLoading] = useState(true);
   const [copiedSnippet, setCopiedSnippet] = useState<string | null>(null);
   const [configTab, setConfigTab] = useState<'laravel' | 'node' | 'python'>('laravel');
+  const [browserHost, setBrowserHost] = useState<string>('192.168.25.105');
+
+  const isTailscaleDomain = browserHost.endsWith('.tailscale.homelab');
+  const isHomelabDomain = browserHost === 'homelab' || browserHost.endsWith('.homelab');
+  const minioConsoleUrl = isTailscaleDomain
+    ? 'http://minio.tailscale.homelab'
+    : isHomelabDomain
+      ? 'http://minio.homelab'
+      : `http://${browserHost}:9002`;
+  const minioApiUrl = isTailscaleDomain
+    ? 'http://s3.tailscale.homelab'
+    : isHomelabDomain
+      ? 'http://s3.homelab'
+      : `http://${browserHost}:9000`;
 
   const handleCopy = (text: string, id: string) => {
     navigator.clipboard.writeText(text);
@@ -65,6 +79,9 @@ export default function StoragePage() {
   };
 
   useEffect(() => {
+    if (typeof window !== 'undefined' && window.location.hostname) {
+      setBrowserHost(window.location.hostname);
+    }
     loadData();
     const interval = setInterval(() => {
       api.getStorageTelemetry().then((st) => {
@@ -389,7 +406,7 @@ export default function StoragePage() {
 
           <div className="flex items-center gap-2">
             <a
-              href="http://192.168.25.101:9002"
+              href={minioConsoleUrl}
               target="_blank"
               rel="noreferrer"
               className="px-3.5 py-2 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold flex items-center gap-2 shadow-sm transition-all"
@@ -404,14 +421,18 @@ export default function StoragePage() {
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <div className="p-4 rounded-xl bg-background border border-border space-y-1.5">
             <span className="text-[11px] font-semibold uppercase text-gray-400 tracking-wider">S3 API Endpoint</span>
-            <div className="font-mono text-sm font-bold text-foreground">http://192.168.25.101:9000</div>
-            <p className="text-[11px] text-gray-500">Internal Docker: <code className="text-emerald-400">http://minio:9000</code></p>
+            <div className="font-mono text-sm font-bold text-foreground break-all">{minioApiUrl}</div>
+            <p className="text-[11px] text-gray-500">
+              Internal Docker: <code className="text-emerald-400">http://minio:9000</code> · LAN/TS <code className="text-gray-300">:9000</code>
+            </p>
           </div>
 
           <div className="p-4 rounded-xl bg-background border border-border space-y-1.5">
             <span className="text-[11px] font-semibold uppercase text-gray-400 tracking-wider">Web Console</span>
-            <div className="font-mono text-sm font-bold text-amber-500">http://192.168.25.101:9002</div>
-            <p className="text-[11px] text-gray-500">Domain: <code className="text-amber-400">http://minio.homelab</code></p>
+            <div className="font-mono text-sm font-bold text-amber-500 break-all">{minioConsoleUrl}</div>
+            <p className="text-[11px] text-gray-500">
+              Domain: <code className="text-amber-400">http://minio.homelab</code> · Port <code className="text-gray-300">:9002</code>
+            </p>
           </div>
 
           <div className="p-4 rounded-xl bg-background border border-border space-y-1.5">
@@ -426,11 +447,12 @@ export default function StoragePage() {
           <div className="p-4 rounded-xl bg-background border border-border space-y-1.5">
             <span className="text-[11px] font-semibold uppercase text-gray-400 tracking-wider">Default Buckets</span>
             <div className="flex flex-wrap gap-1 mt-1">
-              <span className="px-1.5 py-0.5 rounded bg-card border border-border text-[10px] font-mono text-emerald-400">homelab-storage</span>
+              <span className="px-1.5 py-0.5 rounded bg-card border border-border text-[10px] font-mono text-amber-400">images</span>
               <span className="px-1.5 py-0.5 rounded bg-card border border-border text-[10px] font-mono text-blue-400">stock-umkm</span>
+              <span className="px-1.5 py-0.5 rounded bg-card border border-border text-[10px] font-mono text-emerald-400">homelab-storage</span>
               <span className="px-1.5 py-0.5 rounded bg-card border border-border text-[10px] font-mono text-purple-400">backups</span>
             </div>
-            <p className="text-[11px] text-gray-500">Otomatis di-inisiarisasi saat startup</p>
+            <p className="text-[11px] text-gray-500">Otomatis diinisialisasi saat startup (gambar siap akses publik)</p>
           </div>
         </div>
 
@@ -474,9 +496,9 @@ export default function StoragePage() {
               type="button"
               onClick={() => {
                 const snippets = {
-                  laravel: `FILESYSTEM_DISK=s3\nAWS_ACCESS_KEY_ID=admin\nAWS_SECRET_ACCESS_KEY=admin12345\nAWS_DEFAULT_REGION=us-east-1\nAWS_BUCKET=stock-umkm\nAWS_USE_PATH_STYLE_ENDPOINT=true\nAWS_ENDPOINT=http://minio:9000\nAWS_URL=http://192.168.25.101:9000/stock-umkm`,
-                  node: `S3_ENDPOINT=http://minio:9000\nS3_REGION=us-east-1\nS3_ACCESS_KEY_ID=admin\nS3_SECRET_ACCESS_KEY=admin12345\nS3_BUCKET=homelab-storage\nS3_FORCE_PATH_STYLE=true`,
-                  python: `AWS_ACCESS_KEY_ID=admin\nAWS_SECRET_ACCESS_KEY=admin12345\nAWS_DEFAULT_REGION=us-east-1\nS3_ENDPOINT_URL=http://minio:9000\nS3_BUCKET_NAME=homelab-storage`,
+                  laravel: `FILESYSTEM_DISK=s3\nAWS_ACCESS_KEY_ID=admin\nAWS_SECRET_ACCESS_KEY=admin12345\nAWS_DEFAULT_REGION=us-east-1\nAWS_BUCKET=stock-umkm\nAWS_USE_PATH_STYLE_ENDPOINT=true\nAWS_ENDPOINT=http://minio:9000\nAWS_URL=${minioApiUrl}/stock-umkm`,
+                  node: `S3_ENDPOINT=http://minio:9000\nS3_PUBLIC_URL=${minioApiUrl}/images\nS3_REGION=us-east-1\nS3_ACCESS_KEY_ID=admin\nS3_SECRET_ACCESS_KEY=admin12345\nS3_BUCKET=images\nS3_FORCE_PATH_STYLE=true`,
+                  python: `AWS_ACCESS_KEY_ID=admin\nAWS_SECRET_ACCESS_KEY=admin12345\nAWS_DEFAULT_REGION=us-east-1\nS3_ENDPOINT_URL=http://minio:9000\nS3_PUBLIC_URL=${minioApiUrl}/images\nS3_BUCKET_NAME=images`,
                 };
                 handleCopy(snippets[configTab], configTab);
               }}
@@ -506,15 +528,16 @@ AWS_DEFAULT_REGION=us-east-1
 AWS_BUCKET=stock-umkm
 AWS_USE_PATH_STYLE_ENDPOINT=true
 AWS_ENDPOINT=http://minio:9000
-AWS_URL=http://192.168.25.101:9000/stock-umkm`
+AWS_URL=${minioApiUrl}/stock-umkm`
             )}
             {configTab === 'node' && (
               `# Konfigurasi S3 untuk Node.js / Next.js
 S3_ENDPOINT=http://minio:9000
+S3_PUBLIC_URL=${minioApiUrl}/images
 S3_REGION=us-east-1
 S3_ACCESS_KEY_ID=admin
 S3_SECRET_ACCESS_KEY=admin12345
-S3_BUCKET=homelab-storage
+S3_BUCKET=images
 S3_FORCE_PATH_STYLE=true`
             )}
             {configTab === 'python' && (
@@ -523,7 +546,8 @@ AWS_ACCESS_KEY_ID=admin
 AWS_SECRET_ACCESS_KEY=admin12345
 AWS_DEFAULT_REGION=us-east-1
 S3_ENDPOINT_URL=http://minio:9000
-S3_BUCKET_NAME=homelab-storage`
+S3_PUBLIC_URL=${minioApiUrl}/images
+S3_BUCKET_NAME=images`
             )}
           </pre>
         </div>

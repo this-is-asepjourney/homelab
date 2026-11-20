@@ -58,6 +58,73 @@ services:
       - homelab
 
   # =============================================================================
+  # OBJECT STORAGE (MINIO / SILO S3)
+  # =============================================================================
+  minio:
+    image: pgsty/silo:latest
+    container_name: minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      TZ: ${TZ:-Asia/Jakarta}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-admin12345}
+      MINIO_API_CORS_ALLOW_ORIGIN: "*"
+    ports:
+      - "9000:9000"
+      - "9002:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/minio/health/live || wget -qO- http://127.0.0.1:9000/minio/health/live || mc ready local || mcli ready local"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    networks:
+      homelab:
+        aliases:
+          - silo
+          - homelab_minio
+
+  minio-init:
+    image: pgsty/mc:latest
+    container_name: minio-init
+    restart: "no"
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-admin12345}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        MC=$$(command -v mc || command -v mcli || true)
+        if [ -z "$$MC" ]; then
+          echo "ERROR: neither mc nor mcli binary found in pgsty/mc"
+          exit 1
+        fi
+        i=0
+        until $$MC alias set myminio http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"; do
+          i=$$((i + 1))
+          if [ "$$i" -ge 15 ]; then
+            echo "ERROR: failed to connect to minio after 15 attempts"
+            exit 1
+          fi
+          sleep 2
+        done
+        for bucket in images stock-umkm homelab-storage backups; do
+          $$MC mb --ignore-existing "myminio/$$bucket"
+        done
+        for pub_bucket in images stock-umkm homelab-storage; do
+          $$MC anonymous set download "myminio/$$pub_bucket"
+        done
+        echo "MinIO default buckets initialized: images, stock-umkm, homelab-storage (public download), backups (private)."
+    networks:
+      - homelab
+
+  # =============================================================================
   # APPLICATIONS
   # =============================================================================
   nextcloud:
@@ -216,7 +283,7 @@ services:
       MQTT_PORT: 1883
       PSM_API_URL: http://psm-api:8000
       JWT_SECRET: ${JWT_SECRET:-super_secret_pap_jwt_signing_key_production_2026_homelab_core}
-      CORS_ORIGINS: "http://homelab,http://api.homelab,http://psm.homelab,http://psm-api.homelab,http://${SERVER_LAN_IP:-192.168.25.105}:3000,http://${SERVER_LAN_IP:-192.168.25.105}:3001,http://${SERVER_LAN_IP:-192.168.25.105}:3005,http://${SERVER_LAN_IP:-192.168.25.105}:8000,http://${SERVER_LAN_IP:-192.168.25.105}:8001,http://${SERVER_LAN_IP:-192.168.25.105}:8080,http://${SERVER_LAN_IP:-192.168.25.105}:8081,http://${SERVER_TS_IP:-100.78.113.53}:3000,http://${SERVER_TS_IP:-100.78.113.53}:3001,http://${SERVER_TS_IP:-100.78.113.53}:3005,http://${SERVER_TS_IP:-100.78.113.53}:8000,http://${SERVER_TS_IP:-100.78.113.53}:8001,http://${SERVER_TS_IP:-100.78.113.53}:8080,http://${SERVER_TS_IP:-100.78.113.53}:8081,http://localhost:3000,http://localhost:3005,http://localhost:8000,http://localhost:8001"
+      CORS_ORIGINS: "http://homelab,http://api.homelab,http://psm.homelab,http://psm-api.homelab,http://minio.homelab,http://s3.homelab,http://${SERVER_LAN_IP:-192.168.25.105}:3000,http://${SERVER_LAN_IP:-192.168.25.105}:3001,http://${SERVER_LAN_IP:-192.168.25.105}:3005,http://${SERVER_LAN_IP:-192.168.25.105}:8000,http://${SERVER_LAN_IP:-192.168.25.105}:8001,http://${SERVER_LAN_IP:-192.168.25.105}:8080,http://${SERVER_LAN_IP:-192.168.25.105}:8081,http://${SERVER_LAN_IP:-192.168.25.105}:9000,http://${SERVER_LAN_IP:-192.168.25.105}:9002,http://${SERVER_TS_IP:-100.78.113.53}:3000,http://${SERVER_TS_IP:-100.78.113.53}:3001,http://${SERVER_TS_IP:-100.78.113.53}:3005,http://${SERVER_TS_IP:-100.78.113.53}:8000,http://${SERVER_TS_IP:-100.78.113.53}:8001,http://${SERVER_TS_IP:-100.78.113.53}:8080,http://${SERVER_TS_IP:-100.78.113.53}:8081,http://${SERVER_TS_IP:-100.78.113.53}:9000,http://${SERVER_TS_IP:-100.78.113.53}:9002,http://localhost:3000,http://localhost:3005,http://localhost:8000,http://localhost:8001,http://localhost:9000,http://localhost:9002"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -304,6 +371,10 @@ services:
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:-wokeh123}
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-wokeh123}
       HOST_IP: ${SERVER_LAN_IP:-192.168.25.105}
+      MINIO_HOST: minio
+      MINIO_PORT: 9000
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-admin12345}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - psm_storage:/opt/psm
@@ -377,6 +448,7 @@ volumes:
   mysql_data:
   postgres_data:
   redis_data:
+  minio_data:
   nextcloud_data:
   prometheus_data:
   grafana_data:

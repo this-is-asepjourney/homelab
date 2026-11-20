@@ -11,6 +11,8 @@
 192.168.25.105 kuma.homelab
 192.168.25.105 uptime.homelab
 192.168.25.105 cadvisor.homelab
+192.168.25.105 minio.homelab
+192.168.25.105 s3.homelab
 
 100.78.113.53 api.tailscale.homelab
 100.78.113.53 psm.tailscale.homelab
@@ -20,3 +22,5 @@
 100.78.113.53 prometheus.tailscale.homelab
 100.78.113.53 kuma.tailscale.homelab
 100.78.113.53 cadvisor.tailscale.homelab
+100.78.113.53 minio.tailscale.homelab
+100.78.113.53 s3.tailscale.homelab
