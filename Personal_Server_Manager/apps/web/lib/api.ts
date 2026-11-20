@@ -376,6 +376,27 @@ export const api = {
     return res.json();
   },
 
+  async resetProjectEnvironment(
+    id: string,
+    payload: {
+      mode?: 'repair' | 'clean';
+      preserve_app_key?: boolean;
+      regenerate_app_key?: boolean;
+      include_db_vars?: boolean;
+      app_env?: string;
+      app_url?: string;
+    }
+  ) {
+    const res = await fetchWithAuth(`/api/v1/projects/${id}/environment/reset`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      throw new Error(await extractApiErrorMessage(res, 'Failed to reset project environment'));
+    }
+    return res.json();
+  },
+
   async getProjectDatabase(id: string) {
     const res = await fetchWithAuth(`/api/v1/projects/${id}/database`);
     return res.ok ? res.json() : null;

@@ -1,5 +1,7 @@
+import base64
 import os
 import re
+import secrets
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -27,6 +29,7 @@ from apps.api.app.schemas.all_schemas import (
     DockerfileUpdateRequest,
     EnvironmentVariableUpsertRequest,
     EnvironmentUpdateRequest,
+    EnvironmentResetRequest,
     EnvironmentItemResponse,
     DeploymentResponse,
     ContainerResponse,
@@ -1081,6 +1084,286 @@ def upsert_project_environment_item(
         value=val_str,
         updated_at=row.updated_at,
     )
+
+
+def _is_masked_corrupted_value(val: Optional[str]) -> bool:
+    return isinstance(val, str) and "****" in val
+
+
+def _extract_container_port(port_mappings: Optional[str], framework: str) -> int:
+    if port_mappings:
+        first_entry = port_mappings.split(",")[0].strip()
+        if ":" in first_entry:
+            right = first_entry.split(":", 1)[1].split("/", 1)[0].strip()
+            try:
+                port_num = int(right)
+                if port_num > 0:
+                    return port_num
+            except Exception:
+                pass
+    fw = (framework or "").lower()
+    if "laravel" in fw or "php" in fw or "static" in fw:
+        return 80
+    if "fastapi" in fw or "django" in fw:
+        return 8000
+    if "flask" in fw:
+        return 5000
+    return 3000
+
+
+def _read_workspace_env_example(p: Project) -> Dict[str, str]:
+    raw_name = (p.name or "").strip()
+    if not raw_name:
+        return {}
+    slug = re.sub(r"[^a-z0-9_-]+", "-", raw_name.lower()).strip("-")
+    name_variants = [n for n in dict.fromkeys([raw_name, slug]) if n]
+    base_dirs = [
+        os.path.join(settings.STORAGE_BASE_DIR, "workspaces"),
+        "/opt/psm/workspaces",
+        settings.RELEASE_DIR,
+    ]
+    parsed: Dict[str, str] = {}
+    for base in base_dirs:
+        if not base:
+            continue
+        for variant in name_variants:
+            candidate = os.path.join(base, variant, ".env.example")
+            if not os.path.isfile(candidate):
+                continue
+            try:
+                with open(candidate, "r", encoding="utf-8", errors="ignore") as f:
+                    for raw_line in f:
+                        line = raw_line.strip()
+                        if not line or line.startswith("#") or "=" not in line:
+                            continue
+                        k, v = line.split("=", 1)
+                        clean_k = k.strip()
+                        if not clean_k or not _ENV_KEY_RE.match(clean_k):
+                            continue
+                        clean_v = v.strip()
+                        if (
+                            len(clean_v) >= 2
+                            and (
+                                (clean_v.startswith('"') and clean_v.endswith('"'))
+                                or (clean_v.startswith("'") and clean_v.endswith("'"))
+                            )
+                        ):
+                            clean_v = clean_v[1:-1]
+                        parsed[clean_k] = clean_v
+                if parsed:
+                    return parsed
+            except Exception:
+                continue
+    return parsed
+
+
+def _build_framework_default_env(
+    p: Project,
+    existing_env: Dict[str, str],
+    app_env: Optional[str],
+    app_url: Optional[str],
+    preserve_app_key: bool,
+    regenerate_app_key: bool,
+) -> Dict[str, str]:
+    defaults = _read_workspace_env_example(p)
+    fw = (p.framework or "").lower()
+    host_port = extract_host_port(p.port_mappings)
+    container_port = _extract_container_port(p.port_mappings, p.framework)
+    resolved_url = (app_url or "").strip() or (
+        f"http://{settings.SERVER_LAN_IP}:{host_port}"
+        if host_port
+        else f"http://{resolve_effective_domain(p.domain, p.name)}"
+    )
+
+    if "laravel" in fw or "php" in fw:
+        target_app_env = (app_env or "").strip() or "local"
+        existing_app_key = existing_env.get("APP_KEY", "")
+        keep_existing_key = (
+            not regenerate_app_key
+            and preserve_app_key
+            and existing_app_key.startswith("base64:")
+            and not _is_masked_corrupted_value(existing_app_key)
+            and len(existing_app_key) >= 20
+        )
+        app_key = (
+            existing_app_key
+            if keep_existing_key
+            else "base64:" + base64.b64encode(secrets.token_bytes(32)).decode("ascii")
+        )
+        existing_name = (existing_env.get("APP_NAME") or "").strip()
+        clean_app_name = (
+            existing_name
+            if existing_name and not _is_masked_corrupted_value(existing_name)
+            else p.name
+        )
+        defaults.update({
+            "APP_NAME": clean_app_name,
+            "APP_ENV": target_app_env,
+            "APP_DEBUG": "true" if target_app_env == "local" else "false",
+            "APP_KEY": app_key,
+            "APP_URL": resolved_url,
+            "LOG_CHANNEL": "stderr",
+            "SESSION_DRIVER": "file",
+            "CACHE_STORE": "file",
+            "QUEUE_CONNECTION": "sync",
+        })
+    elif any(tok in fw for tok in ("next", "node", "react", "vite")):
+        target_node_env = (app_env or "").strip() or "production"
+        defaults.update({
+            "NODE_ENV": target_node_env,
+            "PORT": str(container_port),
+            ("NEXT_PUBLIC_APP_URL" if "next" in fw else "APP_URL"): resolved_url,
+        })
+    else:
+        target_app_env = (app_env or "").strip() or "production"
+        defaults.update({
+            "APP_ENV": target_app_env,
+            "PORT": str(container_port),
+            "APP_URL": resolved_url,
+        })
+
+    return defaults
+
+
+@router.post("/{project_id}/environment/reset")
+def reset_project_environment(
+    project_id: str,
+    payload: EnvironmentResetRequest,
+    current_user: User = Depends(require_role("owner", "admin")),
+    db: Session = Depends(get_db),
+):
+    """Repair corrupted/misconfigured environment variables or cleanly re-setup defaults + DB credentials."""
+    p = db.query(Project).filter(Project.id == project_id).first()
+    if not p:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    mode = (payload.mode or "repair").strip().lower()
+    if mode not in ("repair", "clean"):
+        raise HTTPException(status_code=400, detail="Mode setup ulang harus 'repair' atau 'clean'")
+
+    existing_rows = (
+        db.query(EnvironmentVariable)
+        .filter(EnvironmentVariable.project_id == project_id)
+        .all()
+    )
+    existing_env: Dict[str, str] = {}
+    for row in existing_rows:
+        try:
+            existing_env[row.key] = decrypt_secret(row.encrypted_value)
+        except Exception:
+            existing_env[row.key] = "********"
+
+    corrupted_keys = [k for k, v in existing_env.items() if _is_masked_corrupted_value(v)]
+    defaults = _build_framework_default_env(
+        p=p,
+        existing_env=existing_env,
+        app_env=payload.app_env,
+        app_url=payload.app_url,
+        preserve_app_key=payload.preserve_app_key,
+        regenerate_app_key=payload.regenerate_app_key,
+    )
+
+    fw = (p.framework or "").lower()
+    is_laravel = "laravel" in fw or "php" in fw
+    is_node = any(tok in fw for tok in ("next", "node", "react", "vite"))
+
+    if mode == "clean":
+        rebuilt_env = dict(defaults)
+    else:
+        rebuilt_env = {
+            k: v for k, v in existing_env.items() if not _is_masked_corrupted_value(v)
+        }
+        for k, v in defaults.items():
+            if k not in rebuilt_env or not str(rebuilt_env[k]).strip():
+                rebuilt_env[k] = v
+
+        if payload.app_env and payload.app_env.strip():
+            if is_laravel:
+                rebuilt_env["APP_ENV"] = defaults["APP_ENV"]
+                rebuilt_env["APP_DEBUG"] = defaults["APP_DEBUG"]
+            elif is_node:
+                rebuilt_env["NODE_ENV"] = defaults["NODE_ENV"]
+            else:
+                rebuilt_env["APP_ENV"] = defaults["APP_ENV"]
+
+        if payload.app_url and payload.app_url.strip():
+            url_key = "NEXT_PUBLIC_APP_URL" if ("next" in fw and not is_laravel) else "APP_URL"
+            rebuilt_env[url_key] = defaults[url_key]
+
+        if is_laravel and (
+            payload.regenerate_app_key
+            or not rebuilt_env.get("APP_KEY")
+            or _is_masked_corrupted_value(existing_env.get("APP_KEY"))
+        ):
+            rebuilt_env["APP_KEY"] = defaults["APP_KEY"]
+
+    db.query(EnvironmentVariable).filter(EnvironmentVariable.project_id == project_id).delete()
+    for clean_key, val in rebuilt_env.items():
+        if not clean_key or not _ENV_KEY_RE.match(clean_key):
+            continue
+        db.add(
+            EnvironmentVariable(
+                project_id=project_id,
+                key=clean_key,
+                encrypted_value=encrypt_secret(str(val)),
+            )
+        )
+    db.commit()
+    db.expire_all()
+
+    if payload.include_db_vars and _normalize_db_engine(p.db_type) != "none":
+        provision_and_sync_project_db(
+            db=db,
+            project=p,
+            custom_db_name=p.db_name,
+            db_type=p.db_type,
+            override_existing_env=True,
+        )
+
+    final_rows = (
+        db.query(EnvironmentVariable)
+        .filter(EnvironmentVariable.project_id == project_id)
+        .order_by(EnvironmentVariable.key.asc())
+        .all()
+    )
+    final_items = []
+    for row in final_rows:
+        try:
+            decrypted = decrypt_secret(row.encrypted_value)
+            masked = mask_secret(decrypted)
+        except Exception:
+            decrypted = ""
+            masked = "********"
+        final_items.append(
+            EnvironmentItemResponse(
+                key=row.key,
+                masked_value=masked,
+                value=decrypted,
+                updated_at=row.updated_at,
+            ).model_dump()
+        )
+
+    mode_label = "Reset Bersih" if mode == "clean" else "Perbaikan & Sinkronisasi"
+    log_activity(
+        db,
+        action="project.environment_reset",
+        resource_type="project",
+        resource_id=project_id,
+        user_id=current_user.id,
+        details={
+            "mode": mode,
+            "count": len(final_items),
+            "cleared_corrupted_keys": corrupted_keys,
+        },
+    )
+
+    return {
+        "message": f"Environment berhasil di-setup ulang ({mode_label}) dengan {len(final_items)} variabel.",
+        "mode": mode,
+        "count": len(final_items),
+        "cleared_corrupted_keys": corrupted_keys,
+        "variables": final_items,
+    }
 
 
 @router.delete("/{project_id}/environment/{env_key}")

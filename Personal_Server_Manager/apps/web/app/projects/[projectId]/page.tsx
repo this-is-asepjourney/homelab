@@ -42,6 +42,7 @@ import {
   Sparkles,
   Save,
   AlertCircle,
+  RotateCcw,
 } from 'lucide-react';
 import { api, formatBytes } from '../../../lib/api';
 import { resolveProjectAccess } from '../../../lib/utils';
@@ -107,6 +108,14 @@ export default function ProjectDetailPage() {
   const [savingEnv, setSavingEnv] = useState(false);
   const [envNotice, setEnvNotice] = useState<{ type: 'success' | 'error'; text: string; needsRedeploy?: boolean } | null>(null);
   const [bulkEnvText, setBulkEnvText] = useState('');
+  const envFileInputRef = useRef<HTMLInputElement>(null);
+  const [showResetEnvPanel, setShowResetEnvPanel] = useState(false);
+  const [resetMode, setResetMode] = useState<'repair' | 'clean'>('repair');
+  const [resetAppEnv, setResetAppEnv] = useState('local');
+  const [resetAppUrl, setResetAppUrl] = useState('');
+  const [resetIncludeDbVars, setResetIncludeDbVars] = useState(true);
+  const [resetRegenerateAppKey, setResetRegenerateAppKey] = useState(false);
+  const [resettingEnv, setResettingEnv] = useState(false);
 
   // Project settings & server deploy state
   const [projectName, setProjectName] = useState('');
@@ -583,6 +592,90 @@ export default function ProjectDetailPage() {
       setEnvNotice({ type: 'error', text: err.message || 'Gagal menyimpan editor .env.' });
     } finally {
       setSavingEnv(false);
+    }
+  };
+
+  const handleOpenResetEnvPanel = () => {
+    const fw = (project?.framework || '').toLowerCase();
+    const isPhpOrLaravel = fw.includes('laravel') || fw.includes('php');
+    setResetMode('repair');
+    setResetAppEnv(isPhpOrLaravel ? 'local' : 'production');
+    setResetAppUrl(access.tailscaleUrl || access.lanUrl || access.domainUrl || '');
+    setResetIncludeDbVars(currentDbType !== 'none');
+    setResetRegenerateAppKey(false);
+    setShowResetEnvPanel((prev) => !prev);
+  };
+
+  const handleImportEnvFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      setBulkEnvText(text);
+      setEnvEditorMode('bulk');
+      setEnvNotice({
+        type: 'success',
+        text: `File "${file.name}" dimuat ke editor .env. Periksa isinya lalu klik "Simpan Semua (.env)" atau "Simpan & Deploy Ulang".`,
+      });
+    } catch {
+      setEnvNotice({ type: 'error', text: 'Gagal membaca file .env yang dipilih.' });
+    } finally {
+      e.target.value = '';
+    }
+  };
+
+  const handleDownloadEnvFile = () => {
+    const lines = envVars.map((v: any) => `${v.key}=${v.value ?? ''}`).join('\n');
+    const blob = new Blob([lines + '\n'], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const safeName = (project?.name || 'project').toLowerCase().replace(/[^a-z0-9_-]/g, '-');
+    a.href = url;
+    a.download = `${safeName}.env`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleResetEnvironment = async (andRedeploy: boolean = false) => {
+    if (
+      resetMode === 'clean' &&
+      !confirm(
+        'Mode Reset Bersih akan menghapus variabel custom yang tidak ada di .env.example dan menyusun ulang konfigurasi awal + database. Lanjutkan?'
+      )
+    ) {
+      return;
+    }
+    try {
+      setResettingEnv(true);
+      setEnvNotice(null);
+      const res = await api.resetProjectEnvironment(projectId, {
+        mode: resetMode,
+        preserve_app_key: !resetRegenerateAppKey,
+        regenerate_app_key: resetRegenerateAppKey,
+        include_db_vars: resetIncludeDbVars,
+        app_env: resetAppEnv || undefined,
+        app_url: resetAppUrl.trim() || undefined,
+      });
+      const clearedNote =
+        res?.cleared_corrupted_keys && res.cleared_corrupted_keys.length > 0
+          ? ` Membersihkan ${res.cleared_corrupted_keys.length} variabel rusak/masked.`
+          : '';
+      setEnvNotice({
+        type: 'success',
+        text: `${res?.message || 'Environment berhasil di-setup ulang.'}${clearedNote}`,
+        needsRedeploy: !andRedeploy,
+      });
+      setShowResetEnvPanel(false);
+      await loadData();
+      if (andRedeploy) {
+        await handleTriggerDeploy();
+      }
+    } catch (err: any) {
+      setEnvNotice({ type: 'error', text: err.message || 'Gagal melakukan setup ulang environment.' });
+    } finally {
+      setResettingEnv(false);
     }
   };
 
@@ -1750,6 +1843,41 @@ export default function ProjectDetailPage() {
             )
           : envVars;
 
+        const envMap: Record<string, string> = {};
+        for (const item of envVars) {
+          if (item.value !== null && item.value !== undefined) {
+            envMap[item.key] = String(item.value);
+          }
+        }
+        const corruptedKeys = envVars
+          .filter((item) => String(item.value ?? '').includes('****'))
+          .map((item) => item.key);
+        const isLaravelProject = /laravel|php/i.test(project?.framework || '');
+        const diagnosticWarnings: string[] = [];
+        if (corruptedKeys.length > 0) {
+          diagnosticWarnings.push(
+            `${corruptedKeys.length} variabel terdeteksi berisi nilai masked rusak ("****"): ${corruptedKeys.slice(0, 4).join(', ')}${corruptedKeys.length > 4 ? '...' : ''}.`
+          );
+        }
+        if (isLaravelProject) {
+          if (envMap.APP_ENV === 'production') {
+            diagnosticWarnings.push(
+              'APP_ENV bernilai "production" — pada akses HTTP IP:Port, Laravel dapat menghasilkan URL aset HTTPS sehingga CSS gagal dimuat.'
+            );
+          }
+          if (!envMap.APP_KEY || String(envMap.APP_KEY).includes('****')) {
+            diagnosticWarnings.push('APP_KEY belum terisi atau tidak valid untuk Laravel.');
+          }
+        }
+        if (
+          (currentDbType === 'mysql' || currentDbType === 'postgres') &&
+          ['192.168.25.101', '127.0.0.1', 'localhost'].includes((envMap.DB_HOST || '').trim())
+        ) {
+          diagnosticWarnings.push(
+            `DB_HOST masih mengarah ke "${envMap.DB_HOST}" — gunakan Setup Ulang / Sync DB untuk mengarahkan ke container Docker jaringan homelab.`
+          );
+        }
+
         return (
           <div className="space-y-6">
             <div className="rounded-xl border border-border bg-card p-5 space-y-4">
@@ -1758,18 +1886,230 @@ export default function ProjectDetailPage() {
                 <div>
                   <h3 className="font-bold text-sm text-foreground">Environment Variables (.env Editor &amp; Secrets)</h3>
                   <p className="text-xs text-gray-500 mt-0.5">
-                    Edit variabel secara satuan atau mode teks <code>.env</code> lengkap. Disimpan terenkripsi AES-Fernet dan diterapkan ke container saat deploy.
+                    Edit variabel secara satuan, mode teks <code>.env</code> lengkap, atau jalankan Setup Ulang jika terjadi kesalahan konfigurasi.
                   </p>
                 </div>
-                <button
-                  onClick={() => handleProvisionDatabase()}
-                  disabled={provisioningDb}
-                  className="px-3 py-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-500 text-xs font-medium flex items-center gap-1.5 self-start whitespace-nowrap"
-                >
-                  <Database className="w-3.5 h-3.5" />
-                  <span>Sync {dbTypeLabel} Env Vars</span>
-                </button>
+                <div className="flex items-center gap-2 flex-wrap self-start">
+                  <button
+                    type="button"
+                    onClick={handleOpenResetEnvPanel}
+                    className={`px-3 py-1.5 rounded-lg border text-xs font-medium flex items-center gap-1.5 whitespace-nowrap transition-colors ${
+                      showResetEnvPanel
+                        ? 'border-amber-500 bg-amber-500/20 text-amber-300'
+                        : 'border-amber-500/30 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400'
+                    }`}
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>Setup Ulang Env</span>
+                  </button>
+                  <button
+                    onClick={() => handleProvisionDatabase()}
+                    disabled={provisioningDb}
+                    className="px-3 py-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-500 text-xs font-medium flex items-center gap-1.5 whitespace-nowrap"
+                  >
+                    <Database className="w-3.5 h-3.5" />
+                    <span>Sync {dbTypeLabel} Env Vars</span>
+                  </button>
+                </div>
               </div>
+
+              {/* Auto-Diagnostics Banner */}
+              {diagnosticWarnings.length > 0 && (
+                <div className="p-3.5 rounded-xl border border-amber-500/30 bg-amber-500/10 text-xs space-y-2">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 font-bold text-amber-300">
+                      <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+                      <span>Terdeteksi Potensi Kesalahan Konfigurasi Environment ({diagnosticWarnings.length})</span>
+                    </div>
+                    {!showResetEnvPanel && (
+                      <button
+                        type="button"
+                        onClick={handleOpenResetEnvPanel}
+                        className="px-3 py-1 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-semibold text-[11px] flex items-center gap-1.5 self-start sm:self-auto"
+                      >
+                        <RotateCcw className="w-3 h-3" />
+                        <span>Buka Setup Ulang Env</span>
+                      </button>
+                    )}
+                  </div>
+                  <ul className="list-disc list-inside space-y-1 text-amber-200/90 text-[11px]">
+                    {diagnosticWarnings.map((w, idx) => (
+                      <li key={idx}>{w}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* Wizard Setup Ulang Environment */}
+              {showResetEnvPanel && (
+                <div className="p-4 rounded-xl border border-amber-500/30 bg-background/80 space-y-4 text-xs">
+                  <div className="flex items-center justify-between border-b border-border pb-2.5">
+                    <div className="flex items-center gap-2 font-bold text-foreground">
+                      <RotateCcw className="w-4 h-4 text-amber-400" />
+                      <span>Wizard Setup Ulang Environment ({project?.framework})</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowResetEnvPanel(false)}
+                      className="text-gray-400 hover:text-foreground"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  {/* Mode Selector */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setResetMode('repair')}
+                      className={`p-3 rounded-xl border text-left space-y-1 transition-all ${
+                        resetMode === 'repair'
+                          ? 'border-blue-500 bg-blue-500/10 ring-1 ring-blue-500/40'
+                          : 'border-border bg-card hover:border-gray-600'
+                      }`}
+                    >
+                      <div className="font-bold text-foreground flex items-center justify-between">
+                        <span>Perbaiki &amp; Lengkapi (Aman)</span>
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/15 text-blue-400 font-semibold">Disarankan</span>
+                      </div>
+                      <p className="text-[11px] text-gray-400 leading-relaxed">
+                        Menghapus nilai rusak (<code>****</code>), melengkapi default framework &amp; <code>.env.example</code> yang hilang, tetap menjaga variabel custom Anda yang masih valid.
+                      </p>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setResetMode('clean')}
+                      className={`p-3 rounded-xl border text-left space-y-1 transition-all ${
+                        resetMode === 'clean'
+                          ? 'border-rose-500 bg-rose-500/10 ring-1 ring-rose-500/40'
+                          : 'border-border bg-card hover:border-gray-600'
+                      }`}
+                    >
+                      <div className="font-bold text-foreground flex items-center justify-between">
+                        <span>Reset Bersih &amp; Setup Ulang Total</span>
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-rose-500/15 text-rose-400 font-semibold">Fresh Reset</span>
+                      </div>
+                      <p className="text-[11px] text-gray-400 leading-relaxed">
+                        Mengosongkan environment lama lalu membangun ulang murni dari <code>.env.example</code>, default framework, dan kredensial database terbaru.
+                      </p>
+                    </button>
+                  </div>
+
+                  {/* Parameters */}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    <div className="space-y-1">
+                      <label className="block text-[11px] text-gray-400 font-medium">
+                        {isLaravelProject ? 'APP_ENV (Mode Aplikasi)' : 'Environment Mode'}
+                      </label>
+                      <select
+                        value={resetAppEnv}
+                        onChange={(e) => setResetAppEnv(e.target.value)}
+                        className="w-full px-3 py-1.5 rounded-lg bg-card border border-border text-foreground font-mono text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      >
+                        <option value="local">local (HTTP + Debug On)</option>
+                        <option value="production">production</option>
+                      </select>
+                    </div>
+
+                    <div className="md:col-span-2 space-y-1">
+                      <div className="flex items-center justify-between gap-2 flex-wrap">
+                        <label className="block text-[11px] text-gray-400 font-medium">APP_URL / Base URL</label>
+                        <div className="flex items-center gap-1.5 text-[10px] font-mono">
+                          {access.tailscaleUrl && (
+                            <button
+                              type="button"
+                              onClick={() => setResetAppUrl(access.tailscaleUrl!)}
+                              className="px-2 py-0.5 rounded border border-cyan-500/30 bg-cyan-500/10 text-cyan-300 hover:bg-cyan-500/20"
+                            >
+                              Tailscale
+                            </button>
+                          )}
+                          {access.lanUrl && (
+                            <button
+                              type="button"
+                              onClick={() => setResetAppUrl(access.lanUrl!)}
+                              className="px-2 py-0.5 rounded border border-emerald-500/30 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20"
+                            >
+                              LAN IP
+                            </button>
+                          )}
+                          {access.domainUrl && (
+                            <button
+                              type="button"
+                              onClick={() => setResetAppUrl(access.domainUrl)}
+                              className="px-2 py-0.5 rounded border border-indigo-500/30 bg-indigo-500/10 text-indigo-300 hover:bg-indigo-500/20"
+                            >
+                              Domain
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                      <input
+                        type="text"
+                        value={resetAppUrl}
+                        onChange={(e) => setResetAppUrl(e.target.value)}
+                        placeholder="http://100.78.113.53:3101"
+                        className="w-full px-3 py-1.5 rounded-lg bg-card border border-border text-foreground font-mono text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-5 pt-1">
+                    {currentDbType !== 'none' && (
+                      <label className="inline-flex items-center gap-2 text-xs text-gray-300 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={resetIncludeDbVars}
+                          onChange={(e) => setResetIncludeDbVars(e.target.checked)}
+                          className="rounded border-border bg-card text-emerald-500"
+                        />
+                        <span>Sinkronkan ulang kredensial Database ({dbTypeLabel})</span>
+                      </label>
+                    )}
+
+                    {isLaravelProject && (
+                      <label className="inline-flex items-center gap-2 text-xs text-gray-300 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={resetRegenerateAppKey}
+                          onChange={(e) => setResetRegenerateAppKey(e.target.checked)}
+                          className="rounded border-border bg-card text-amber-500"
+                        />
+                        <span>Generate ulang <code>APP_KEY</code> baru</span>
+                      </label>
+                    )}
+                  </div>
+
+                  <div className="flex flex-wrap items-center justify-end gap-2 pt-2 border-t border-border">
+                    <button
+                      type="button"
+                      onClick={() => setShowResetEnvPanel(false)}
+                      className="px-3 py-1.5 rounded-lg border border-border hover:bg-card text-gray-300"
+                    >
+                      Batal
+                    </button>
+                    <button
+                      type="button"
+                      disabled={resettingEnv}
+                      onClick={() => handleResetEnvironment(false)}
+                      className="px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold flex items-center gap-1.5 disabled:opacity-50"
+                    >
+                      <RotateCcw className={`w-3.5 h-3.5 ${resettingEnv ? 'animate-spin' : ''}`} />
+                      <span>{resettingEnv ? 'Memproses...' : 'Terapkan Setup Ulang'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      disabled={resettingEnv || deploying}
+                      onClick={() => handleResetEnvironment(true)}
+                      className="px-4 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-semibold flex items-center gap-1.5 disabled:opacity-50"
+                    >
+                      <Rocket className="w-3.5 h-3.5" />
+                      <span>{deploying ? 'Deploying...' : 'Setup Ulang & Deploy Ulang'}</span>
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {/* Notice & Redeploy Prompt */}
               {envNotice && (
@@ -1819,6 +2159,33 @@ export default function ProjectDetailPage() {
                 </div>
 
                 <div className="flex items-center gap-2 flex-wrap text-xs">
+                  <input
+                    ref={envFileInputRef}
+                    type="file"
+                    accept=".env,text/plain,*"
+                    className="hidden"
+                    onChange={handleImportEnvFile}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => envFileInputRef.current?.click()}
+                    className="px-3 py-1.5 rounded-lg border border-border hover:bg-background text-foreground flex items-center gap-1.5 transition-colors"
+                    title="Muat isi file .env dari komputer ke editor"
+                  >
+                    <Upload className="w-3.5 h-3.5 text-blue-400" />
+                    <span>Import .env</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleDownloadEnvFile}
+                    disabled={envVars.length === 0}
+                    className="px-3 py-1.5 rounded-lg border border-border hover:bg-background text-foreground flex items-center gap-1.5 transition-colors disabled:opacity-50"
+                    title="Unduh semua variabel sebagai file .env"
+                  >
+                    <Download className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Unduh .env</span>
+                  </button>
+
                   {envEditorMode === 'list' && (
                     <button
                       type="button"

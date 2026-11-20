@@ -198,6 +198,14 @@ class EnvironmentVariableUpsertRequest(BaseModel):
 class EnvironmentUpdateRequest(BaseModel):
     variables: List[EnvironmentVariableItem]
 
+class EnvironmentResetRequest(BaseModel):
+    mode: str = "repair"  # "repair" or "clean"
+    preserve_app_key: bool = True
+    regenerate_app_key: bool = False
+    include_db_vars: bool = True
+    app_env: Optional[str] = None
+    app_url: Optional[str] = None
+
 class EnvironmentItemResponse(BaseModel):
     key: str
     masked_value: str

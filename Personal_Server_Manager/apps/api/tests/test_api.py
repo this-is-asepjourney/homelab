@@ -680,3 +680,89 @@ def test_project_database_connection_and_overview(client):
     ]
     assert len(matching_dbs) == 1
     assert any(cp["id"] == pid for cp in matching_dbs[0]["connected_projects"])
+
+
+def test_project_environment_reset_repair_and_clean(client):
+    token = get_auth_token(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    server_id = client.get("/api/v1/servers", headers=headers).json()[0]["id"]
+
+    old_app_key = "base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+    proj_res = client.post(
+        "/api/v1/projects",
+        json={
+            "server_id": server_id,
+            "name": "laravel-reset-app",
+            "framework": "Laravel",
+            "source_type": "git",
+            "repository_url": "https://github.com/example/laravel-reset-app.git",
+            "port_mappings": "3101:80",
+            "db_type": "mysql",
+            "database_name": "laravel_reset_db",
+            "auto_provision_db": True,
+            "auto_deploy": False,
+            "environment_variables": [
+                {"key": "CUSTOM_API_KEY", "value": "real_key_123"},
+                {"key": "APP_KEY", "value": old_app_key},
+                {"key": "BROKEN_SECRET", "value": "su****87"},
+                {"key": "APP_ENV", "value": "production"},
+            ],
+        },
+        headers=headers,
+    )
+    assert proj_res.status_code == 200
+    pid = proj_res.json()["id"]
+
+    # 1. Repair mode: clears masked corrupted keys, keeps valid custom & APP_KEY, applies app_env/app_url & DB vars
+    repair_res = client.post(
+        f"/api/v1/projects/{pid}/environment/reset",
+        json={
+            "mode": "repair",
+            "preserve_app_key": True,
+            "regenerate_app_key": False,
+            "include_db_vars": True,
+            "app_env": "local",
+            "app_url": "http://100.78.113.53:3101",
+        },
+        headers=headers,
+    )
+    assert repair_res.status_code == 200
+    repair_data = repair_res.json()
+    assert repair_data["mode"] == "repair"
+    assert "BROKEN_SECRET" in repair_data["cleared_corrupted_keys"]
+
+    repair_map = {item["key"]: item["value"] for item in repair_data["variables"]}
+    assert "BROKEN_SECRET" not in repair_map
+    assert repair_map["CUSTOM_API_KEY"] == "real_key_123"
+    assert repair_map["APP_ENV"] == "local"
+    assert repair_map["APP_DEBUG"] == "true"
+    assert repair_map["APP_URL"] == "http://100.78.113.53:3101"
+    assert repair_map["APP_KEY"] == old_app_key
+    assert repair_map["DB_CONNECTION"] == "mysql"
+    assert repair_map["DB_DATABASE"] == "laravel_reset_db"
+
+    # 2. Clean mode: clears old custom keys, generates brand-new APP_KEY, rebuilds defaults + DB vars
+    clean_res = client.post(
+        f"/api/v1/projects/{pid}/environment/reset",
+        json={
+            "mode": "clean",
+            "preserve_app_key": False,
+            "regenerate_app_key": True,
+            "include_db_vars": True,
+            "app_env": "local",
+            "app_url": "http://100.78.113.53:3101",
+        },
+        headers=headers,
+    )
+    assert clean_res.status_code == 200
+    clean_data = clean_res.json()
+    assert clean_data["mode"] == "clean"
+
+    clean_map = {item["key"]: item["value"] for item in clean_data["variables"]}
+    assert "CUSTOM_API_KEY" not in clean_map
+    assert clean_map["APP_KEY"].startswith("base64:")
+    assert clean_map["APP_KEY"] != old_app_key
+    assert clean_map["APP_ENV"] == "local"
+    assert clean_map["APP_URL"] == "http://100.78.113.53:3101"
+    assert clean_map["DB_CONNECTION"] == "mysql"
+    assert clean_map["MYSQL_DATABASE"] == "laravel_reset_db"

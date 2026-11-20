@@ -86,14 +86,18 @@ async def create_git_deployment(
         raise HTTPException(status_code=400, detail="Project does not have a Git repository configured")
 
     # Update port_mappings, domain, db_type, and env vars if provided in deploy payload
+    old_db_type = (project.db_type or "").strip().lower()
     if payload.port_mappings:
         project.port_mappings = payload.port_mappings.strip()
 
     if payload.domain and payload.domain.strip():
         project.domain = resolve_effective_domain(payload.domain, project.name)
 
+    db_type_changed = False
     if payload.db_type:
-        project.db_type = payload.db_type.strip().lower()
+        new_db_type = payload.db_type.strip().lower()
+        db_type_changed = bool(new_db_type and new_db_type != old_db_type)
+        project.db_type = new_db_type
 
     if payload.environment_variables:
         for item in payload.environment_variables:
@@ -139,8 +143,10 @@ async def create_git_deployment(
     db.add(initial_log)
     db.commit()
 
-    # Auto-provision & auto-connect database for the project (respecting explicit db_type and overriding conflicting env)
-    db_info, env_vars = provision_and_sync_project_db(db, project, db_type=project.db_type, override_existing_env=True)
+    # Auto-provision & auto-connect database for the project (preserve user-edited env unless db_type changed)
+    db_info, env_vars = provision_and_sync_project_db(
+        db, project, db_type=project.db_type, override_existing_env=db_type_changed
+    )
 
     db_type_label = (project.db_type or db_info.get("db_type") or "Database").upper()
     db_log_msg = (
@@ -257,11 +263,15 @@ async def finalize_zip_upload(
         raise HTTPException(status_code=400, detail="Only .zip files are supported")
 
     # Update port mappings and db_type if provided with upload
+    old_db_type = (project.db_type or "").strip().lower()
     if port_mappings:
         project.port_mappings = port_mappings.strip()
 
+    db_type_changed = False
     if db_type:
-        project.db_type = db_type.strip().lower()
+        new_db_type = db_type.strip().lower()
+        db_type_changed = bool(new_db_type and new_db_type != old_db_type)
+        project.db_type = new_db_type
 
     # Update environment variables if provided
     if env_vars_json:
@@ -349,8 +359,10 @@ async def finalize_zip_upload(
     db.add(initial_log)
     db.commit()
 
-    # Auto-provision & auto-connect database for ZIP deployment (respecting explicit db_type and overriding conflicting env)
-    db_info, env_vars = provision_and_sync_project_db(db, project, db_type=project.db_type, override_existing_env=True)
+    # Auto-provision & auto-connect database for ZIP deployment (preserve user-edited env unless db_type changed)
+    db_info, env_vars = provision_and_sync_project_db(
+        db, project, db_type=project.db_type, override_existing_env=db_type_changed
+    )
 
     try:
         eff_domain = resolve_effective_domain(project.domain, project.name)

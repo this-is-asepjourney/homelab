@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useId } from 'react';
+import React, { useState, useEffect, useId, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   FolderGit2,
@@ -105,6 +105,9 @@ export function DeployProjectModal({
   const [autoProvisionDb, setAutoProvisionDb] = useState(existingProject?.db_type ? existingProject.db_type !== 'none' : true);
   const [customDbName, setCustomDbName] = useState(existingProject?.db_name || '');
   const [showSecrets, setShowSecrets] = useState(false);
+  const [loadingExistingEnv, setLoadingExistingEnv] = useState(false);
+  const [existingEnvLoaded, setExistingEnvLoaded] = useState(false);
+  const envFileInputRef = useRef<HTMLInputElement>(null);
 
   // Submission
   const [deploying, setDeploying] = useState(false);
@@ -258,6 +261,47 @@ export function DeployProjectModal({
     }
   }, [existingProject, servers]);
 
+  // Load existing decrypted environment variables when editing/redeploying an existing project
+  useEffect(() => {
+    if (!isOpen) return;
+    if (existingProject?.id) {
+      let active = true;
+      setLoadingExistingEnv(true);
+      setExistingEnvLoaded(false);
+      api
+        .getProjectEnvironment(existingProject.id, true)
+        .then((vars) => {
+          if (!active) return;
+          if (Array.isArray(vars) && vars.length > 0) {
+            const mapped = vars.map((v: any) => ({
+              key: String(v.key || ''),
+              value: String(v.value ?? ''),
+              isSecret: /SECRET|PASS|KEY|TOKEN/i.test(String(v.key || '')),
+            }));
+            setEnvRows(mapped);
+            setRawEnvText(mapped.map((m) => `${m.key}=${m.value}`).join('\n'));
+          } else {
+            setEnvRows([{ key: '', value: '' }]);
+            setRawEnvText('');
+          }
+          setExistingEnvLoaded(true);
+        })
+        .catch(() => {
+          if (active) setExistingEnvLoaded(false);
+        })
+        .finally(() => {
+          if (active) setLoadingExistingEnv(false);
+        });
+      return () => {
+        active = false;
+      };
+    } else {
+      setExistingEnvLoaded(false);
+      setEnvRows([{ key: 'NODE_ENV', value: 'production', isSecret: false }]);
+      setRawEnvText('NODE_ENV=production');
+    }
+  }, [isOpen, existingProject?.id]);
+
   if (!isOpen) return null;
 
   // Selected server details
@@ -347,6 +391,33 @@ export function DeployProjectModal({
     }
   };
 
+  const parseEnvTextLines = (text: string): Array<{ key: string; value: string; isSecret?: boolean }> => {
+    const parsedMap = new Map<string, string>();
+    const lines = text.split(/\r?\n/);
+    for (const rawLine of lines) {
+      const trimmed = rawLine.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const cleanLine = trimmed.startsWith('export ') ? trimmed.slice(7).trim() : trimmed;
+      const idx = cleanLine.indexOf('=');
+      if (idx <= 0) continue;
+      const k = cleanLine.slice(0, idx).trim();
+      if (!k) continue;
+      let v = cleanLine.slice(idx + 1).trim();
+      if (
+        v.length >= 2 &&
+        ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'")))
+      ) {
+        v = v.slice(1, -1);
+      }
+      parsedMap.set(k, v);
+    }
+    return Array.from(parsedMap.entries()).map(([key, value]) => ({
+      key,
+      value,
+      isSecret: /SECRET|PASS|KEY|TOKEN/i.test(key),
+    }));
+  };
+
   // Env table <-> raw sync
   const syncTableToRaw = (rows: Array<{ key: string; value: string }>) => {
     const text = rows
@@ -357,20 +428,26 @@ export function DeployProjectModal({
   };
 
   const syncRawToTable = (text: string) => {
-    const lines = text.split('\n');
-    const newRows: Array<{ key: string; value: string }> = [];
-    for (const rawLine of lines) {
-      const line = rawLine.trim();
-      if (!line || line.startsWith('#')) continue;
-      const idx = line.indexOf('=');
-      if (idx !== -1) {
-        newRows.push({
-          key: line.slice(0, idx).trim(),
-          value: line.slice(idx + 1).trim(),
-        });
-      }
-    }
+    const newRows = parseEnvTextLines(text);
     setEnvRows(newRows.length > 0 ? newRows : [{ key: '', value: '' }]);
+  };
+
+  const handleImportEnvFileInModal = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const parsed = parseEnvTextLines(text);
+      setRawEnvText(parsed.map((r) => `${r.key}=${r.value}`).join('\n'));
+      setEnvRows(parsed.length > 0 ? parsed : [{ key: '', value: '' }]);
+      if (existingProject?.id) {
+        setExistingEnvLoaded(true);
+      }
+    } catch {
+      setErrorMsg('Gagal membaca file .env yang dipilih.');
+    } finally {
+      e.target.value = '';
+    }
   };
 
   const addEnvRow = () => {
@@ -403,22 +480,11 @@ export function DeployProjectModal({
   // Compile final env vars
   const compileEnvVars = (): Array<{ key: string; value: string }> => {
     if (envMode === 'raw') {
-      const lines = rawEnvText.split('\n');
-      const vars: Array<{ key: string; value: string }> = [];
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed || trimmed.startsWith('#')) continue;
-        const eq = trimmed.indexOf('=');
-        if (eq > 0) {
-          vars.push({
-            key: trimmed.slice(0, eq).trim(),
-            value: trimmed.slice(eq + 1).trim(),
-          });
-        }
-      }
-      return vars;
+      return parseEnvTextLines(rawEnvText).map(({ key, value }) => ({ key, value }));
     }
-    return envRows.filter((r) => r.key.trim().length > 0);
+    return envRows
+      .filter((r) => r.key.trim().length > 0)
+      .map((r) => ({ key: r.key.trim(), value: r.value }));
   };
 
   // Final Action: Create & Deploy
@@ -471,15 +537,16 @@ export function DeployProjectModal({
           });
         } catch (_) {}
 
-        if (envVariables && envVariables.length > 0) {
+        if (existingEnvLoaded) {
           try {
             await api.updateProjectEnvironment(existingProject.id, envVariables);
           } catch (_) {}
         }
 
+        const deployEnvPayload = existingEnvLoaded ? envVariables : undefined;
         setDeployStatusText('Meluncurkan container release baru di server...');
         if (sourceType === 'upload' && zipFile) {
-          const dep = await api.uploadZipDeployment(existingProject.id, zipFile, portString, envVariables, dbType);
+          const dep = await api.uploadZipDeployment(existingProject.id, zipFile, portString, deployEnvPayload, dbType);
           onClose();
           if (onSuccess) onSuccess(dep);
           router.push(`/deployments/${dep.id}`);
@@ -489,7 +556,7 @@ export function DeployProjectModal({
           if (onSuccess) onSuccess(dep);
           router.push(`/deployments/${dep.id}`);
         } else {
-          const dep = await api.triggerGitDeployment(existingProject.id, branch || 'main', portString, envVariables, dbType);
+          const dep = await api.triggerGitDeployment(existingProject.id, branch || 'main', portString, deployEnvPayload, dbType);
           onClose();
           if (onSuccess) onSuccess(dep);
           router.push(`/deployments/${dep.id}`);
@@ -1293,7 +1360,7 @@ export function DeployProjectModal({
               </div>
 
               {/* Environment Variables Header */}
-              <div className="flex items-center justify-between border-b border-border pb-2">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border pb-2">
                 <div>
                   <h3 className="text-xs font-bold text-foreground flex items-center gap-2">
                     <Key className="w-4 h-4 text-amber-500" />
@@ -1302,7 +1369,24 @@ export function DeployProjectModal({
                   <p className="text-[11px] text-gray-500">Semua variabel dienkripsi aman (AES-Fernet) saat disimpan.</p>
                 </div>
 
-                <div className="flex items-center gap-2 text-xs">
+                <div className="flex items-center gap-2 text-xs flex-wrap">
+                  <input
+                    ref={envFileInputRef}
+                    type="file"
+                    accept=".env,text/plain,*"
+                    className="hidden"
+                    onChange={handleImportEnvFileInModal}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => envFileInputRef.current?.click()}
+                    className="px-2.5 py-1 rounded border border-border text-gray-300 hover:text-foreground hover:bg-background flex items-center gap-1"
+                    title="Muat isi file .env dari komputer Anda"
+                  >
+                    <Upload className="w-3.5 h-3.5 text-blue-400" />
+                    <span>Import .env</span>
+                  </button>
+
                   <button
                     type="button"
                     onClick={() => setShowSecrets(!showSecrets)}
@@ -1340,6 +1424,13 @@ export function DeployProjectModal({
                   </div>
                 </div>
               </div>
+
+              {loadingExistingEnv && (
+                <div className="flex items-center gap-2 p-2.5 rounded-lg border border-blue-500/30 bg-blue-500/10 text-blue-400 text-xs">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+                  <span>Memuat environment variables tersimpan dari project...</span>
+                </div>
+              )}
 
               {/* Env Mode: Table */}
               {envMode === 'table' ? (
