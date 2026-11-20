@@ -24,3 +24,8 @@ scrape_configs:
     metrics_path: "/metrics"
     static_configs:
       - targets: ["psm-api:8000"]
+
+  - job_name: "telegraf"
+    scrape_interval: 5s
+    static_configs:
+      - targets: ["telegraf:9273"]

@@ -167,6 +167,24 @@ services:
     networks:
       - homelab
 
+  telegraf:
+    image: telegraf:1.29
+    container_name: telegraf
+    restart: unless-stopped
+    ports:
+      - "9273:9273"
+    volumes:
+      - ./telegraf/telegraf.conf:/etc/telegraf/telegraf.conf:ro
+    environment:
+      - MQTT_BROKER_HOST=mosquitto
+      - MQTT_BROKER_PORT=1883
+      - MQTT_USERNAME=${MQTT_USER:-useriot}
+      - MQTT_PASSWORD=${MQTT_PASSWORD:-25022002}
+    networks:
+      - homelab
+    depends_on:
+      - mosquitto
+
   # =============================================================================
   # OBSERVABILITY & MONITORING
   # =============================================================================
@@ -219,11 +237,18 @@ services:
     restart: unless-stopped
     depends_on:
       - prometheus
+      - postgres
+      - mysql
     environment:
       TZ: ${TZ:-Asia/Jakarta}
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-fadb}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-wokeh123}
       GF_USERS_ALLOW_SIGN_UP: "false"
+      POSTGRES_USER: ${POSTGRES_USER:-fadb}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-wokeh123}
+      MYSQL_USER: ${MYSQL_USER:-fadb}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-wokeh123}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-fadb}
     ports:
       - "3000:3000"
     volumes:
@@ -268,6 +293,12 @@ services:
       SERVER_TS_IP: ${SERVER_TS_IP:-100.78.113.53}
       PORT: 8000
       PAP_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-fadb}:${POSTGRES_PASSWORD:-wokeh123}@postgres:5432/pap_core
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-fadb}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-wokeh123}
+      IOT_POSTGRES_DB: eternal_iot
+      ENABLE_MQTT_CONSUMER: "true"
       PSM_DATABASE_HOST: postgres
       PSM_DATABASE_PORT: 5432
       PSM_DATABASE_NAME: psm
@@ -281,6 +312,8 @@ services:
       PROMETHEUS_URL: http://prometheus:9090
       MQTT_HOST: mosquitto
       MQTT_PORT: 1883
+      MQTT_USERNAME: ${MQTT_USER:-useriot}
+      MQTT_PASSWORD: ${MQTT_PASSWORD:-25022002}
       PSM_API_URL: http://psm-api:8000
       JWT_SECRET: ${JWT_SECRET:-super_secret_pap_jwt_signing_key_production_2026_homelab_core}
       CORS_ORIGINS: "http://homelab,http://api.homelab,http://psm.homelab,http://psm-api.homelab,http://minio.homelab,http://s3.homelab,http://${SERVER_LAN_IP:-192.168.25.105}:3000,http://${SERVER_LAN_IP:-192.168.25.105}:3001,http://${SERVER_LAN_IP:-192.168.25.105}:3005,http://${SERVER_LAN_IP:-192.168.25.105}:8000,http://${SERVER_LAN_IP:-192.168.25.105}:8001,http://${SERVER_LAN_IP:-192.168.25.105}:8080,http://${SERVER_LAN_IP:-192.168.25.105}:8081,http://${SERVER_LAN_IP:-192.168.25.105}:9000,http://${SERVER_LAN_IP:-192.168.25.105}:9002,http://${SERVER_TS_IP:-100.78.113.53}:3000,http://${SERVER_TS_IP:-100.78.113.53}:3001,http://${SERVER_TS_IP:-100.78.113.53}:3005,http://${SERVER_TS_IP:-100.78.113.53}:8000,http://${SERVER_TS_IP:-100.78.113.53}:8001,http://${SERVER_TS_IP:-100.78.113.53}:8080,http://${SERVER_TS_IP:-100.78.113.53}:8081,http://${SERVER_TS_IP:-100.78.113.53}:9000,http://${SERVER_TS_IP:-100.78.113.53}:9002,http://localhost:3000,http://localhost:3005,http://localhost:8000,http://localhost:8001,http://localhost:9000,http://localhost:9002"

@@ -103,7 +103,7 @@ async def _lifespan(application: FastAPI):
             print(f"[PAP Core] PSM DB init notice: {e}")
 
     # 3. Start Realtime MQTT -> InfluxDB Consumer Worker (if enabled on this node)
-    enable_mqtt = os.getenv("ENABLE_MQTT_CONSUMER", "false").lower() in ("true", "1", "yes")
+    enable_mqtt = os.getenv("ENABLE_MQTT_CONSUMER", "true").lower() in ("true", "1", "yes")
     if enable_mqtt:
         try:
             from app.services.mqtt_influx_consumer import mqtt_influx_consumer

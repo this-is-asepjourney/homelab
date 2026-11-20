@@ -1,0 +1,786 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": true,
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 100,
+      "title": "⚡ Realtime Device Status & Key Indicators",
+      "type": "row"
+    },
+    {
+      "id": 1,
+      "title": "Device Status",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 3, "x": 0, "y": 1 },
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-iot-db"
+      },
+      "pluginVersion": "10.0.0",
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "ONLINE": { "color": "green", "index": 0, "text": "ONLINE" },
+                "OFFLINE": { "color": "red", "index": 1, "text": "OFFLINE" }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-iot-db"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT CASE WHEN last_seen_at >= NOW() - INTERVAL '90 seconds' THEN 'ONLINE' ELSE 'OFFLINE' END AS \"Connection\" FROM iot_devices WHERE ('$device' = 'All' OR device_serial = '$device') ORDER BY last_seen_at DESC LIMIT 1;",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Temperature",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 3, "x": 3, "y": 1 },
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-iot-db"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "#73BF69", "value": null },
+              { "color": "#FF9830", "value": 30 },
+              { "color": "#F2495C", "value": 38 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-iot-db"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT recorded_at AS \"time\", temperature_c AS \"Temperature\" FROM iot_telemetry_logs WHERE ('$device' = 'All' OR device_serial = '$device') AND $__timeFilter(recorded_at) ORDER BY recorded_at ASC;",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Humidity",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 3, "x": 6, "y": 1 },
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-iot-db"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "#5794F2", "value": null },
+              { "color": "#73BF69", "value": 45 },
+              { "color": "#FF9830", "value": 75 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-iot-db"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT recorded_at AS \"time\", humidity_pct AS \"Humidity\" FROM iot_telemetry_logs WHERE ('$device' = 'All' OR device_serial = '$device') AND $__timeFilter(recorded_at) ORDER BY recorded_at ASC;",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Heat Index",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 3, "x": 9, "y": 1 },
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-iot-db"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "#73BF69", "value": null },
+              { "color": "#FF9830", "value": 32 },
+              { "color": "#F2495C", "value": 40 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-iot-db"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT recorded_at AS \"time\", heat_index_c AS \"Heat Index\" FROM iot_telemetry_logs WHERE ('$device' = 'All' OR device_serial = '$device') AND $__timeFilter(recorded_at) ORDER BY recorded_at ASC;",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Lock Status",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 3, "x": 12, "y": 1 },
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-iot-db"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "1": { "color": "red", "index": 0, "text": "LOCKED" },
+                "0": { "color": "green", "index": 1, "text": "UNLOCKED" }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-iot-db"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT is_locked FROM device_locks WHERE ('$device' = 'All' OR device_serial = '$device') ORDER BY updated_at DESC LIMIT 1;",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "WiFi Signal (RSSI)",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 3, "x": 15, "y": 1 },
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-iot-db"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dBm",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "#F2495C", "value": null },
+              { "color": "#FF9830", "value": -85 },
+              { "color": "#73BF69", "value": -70 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-iot-db"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT recorded_at AS \"time\", wifi_rssi AS \"RSSI\" FROM iot_telemetry_logs WHERE ('$device' = 'All' OR device_serial = '$device') AND $__timeFilter(recorded_at) ORDER BY recorded_at ASC;",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "ESP32 Free Heap",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 3, "x": 18, "y": 1 },
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-iot-db"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "kbytes",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "#F2495C", "value": null },
+              { "color": "#FF9830", "value": 50 },
+              { "color": "#73BF69", "value": 100 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-iot-db"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT recorded_at AS \"time\", (free_heap / 1024.0) AS \"Heap (KB)\" FROM iot_telemetry_logs WHERE ('$device' = 'All' OR device_serial = '$device') AND $__timeFilter(recorded_at) ORDER BY recorded_at ASC;",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Uptime",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 3, "x": 21, "y": 1 },
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-iot-db"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "#5794F2", "value": null },
+              { "color": "#73BF69", "value": 3600 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-iot-db"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT uptime_sec FROM iot_devices WHERE ('$device' = 'All' OR device_serial = '$device') ORDER BY last_seen_at DESC LIMIT 1;",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 },
+      "id": 101,
+      "title": "📈 Telemetry & Environmental Time-Series",
+      "type": "row"
+    },
+    {
+      "id": 9,
+      "title": "Temperature & Heat Index Trend (°C)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-iot-db"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "fillOpacity": 15
+          },
+          "unit": "celsius"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Temperature (°C)" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "#FF9830", "mode": "fixed" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Heat Index (°C)" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "#F2495C", "mode": "fixed" } }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "calcs": ["min", "max", "mean", "lastNotNull"],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-iot-db"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT recorded_at AS \"time\", temperature_c AS \"Temperature (°C)\", heat_index_c AS \"Heat Index (°C)\" FROM iot_telemetry_logs WHERE ('$device' = 'All' OR device_serial = '$device') AND $__timeFilter(recorded_at) ORDER BY recorded_at ASC;",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "title": "Humidity & WiFi Signal (RSSI) Trend",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-iot-db"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "showPoints": "auto",
+            "fillOpacity": 15
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Humidity (%)" },
+            "properties": [
+              { "id": "unit", "value": "percent" },
+              { "id": "color", "value": { "fixedColor": "#5794F2", "mode": "fixed" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "WiFi RSSI (dBm)" },
+            "properties": [
+              { "id": "unit", "value": "dBm" },
+              { "id": "custom.axisPlacement", "value": "right" },
+              { "id": "color", "value": { "fixedColor": "#73BF69", "mode": "fixed" } }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "calcs": ["min", "max", "lastNotNull"],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-iot-db"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT recorded_at AS \"time\", humidity_pct AS \"Humidity (%)\", wifi_rssi AS \"WiFi RSSI (dBm)\" FROM iot_telemetry_logs WHERE ('$device' = 'All' OR device_serial = '$device') AND $__timeFilter(recorded_at) ORDER BY recorded_at ASC;",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 },
+      "id": 102,
+      "title": "🛡️ Access Control & NFC Audit Trail",
+      "type": "row"
+    },
+    {
+      "id": 11,
+      "title": "Recent NFC / RFID Card Access Logs",
+      "type": "table",
+      "gridPos": { "h": 7, "w": 14, "x": 0, "y": 15 },
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-iot-db"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "displayMode": "auto"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Action" },
+            "properties": [
+              {
+                "id": "custom.displayMode",
+                "value": "color-background"
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  { "type": "value", "options": { "TAP_ON": { "color": "green", "text": "TAP_ON" }, "TAP_OFF": { "color": "blue", "text": "TAP_OFF" }, "DENIED": { "color": "red", "text": "DENIED" } } }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [
+          { "desc": true, "displayName": "Timestamp" }
+        ]
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-iot-db"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT created_at AS \"Timestamp\", uid AS \"Card UID\", nama AS \"User / Operator\", role AS \"Role\", action_type AS \"Action\", lock_duration_sec AS \"Duration (s)\", device_serial AS \"Device\", device_ip AS \"Device IP\" FROM nfc_access_logs WHERE ('$device' = 'All' OR device_serial = '$device') AND $__timeFilter(created_at) ORDER BY created_at DESC LIMIT 50;",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "title": "ESP32 Heap Memory Diagnostics",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 10, "x": 14, "y": 15 },
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-iot-db"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 20
+          },
+          "unit": "kbytes"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Free Heap (KB)" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "#9954E0", "mode": "fixed" } }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "calcs": ["min", "max", "lastNotNull"],
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-iot-db"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT recorded_at AS \"time\", (free_heap / 1024.0) AS \"Free Heap (KB)\" FROM iot_telemetry_logs WHERE ('$device' = 'All' OR device_serial = '$device') AND $__timeFilter(recorded_at) ORDER BY recorded_at ASC;",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 22 },
+      "id": 103,
+      "title": "📋 Fleet Hardware & Device Inventory",
+      "type": "row"
+    },
+    {
+      "id": 13,
+      "title": "Registered IoT Eternal Fleet Registry",
+      "type": "table",
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 23 },
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-iot-db"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "displayMode": "auto"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Status" },
+            "properties": [
+              {
+                "id": "custom.displayMode",
+                "value": "color-background"
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  { "type": "value", "options": { "ONLINE": { "color": "green", "text": "ONLINE" }, "OFFLINE": { "color": "red", "text": "OFFLINE" } } }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-iot-db"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT device_serial AS \"Serial\", device_name AS \"Device Name\", model AS \"Hardware Model\", ip_address AS \"IP\", mac_address AS \"MAC\", firmware_version AS \"Firmware\", temperature_c AS \"Temp (°C)\", humidity_pct AS \"Humidity (%)\", wifi_rssi AS \"RSSI (dBm)\", CASE WHEN last_seen_at >= NOW() - INTERVAL '90 seconds' THEN 'ONLINE' ELSE 'OFFLINE' END AS \"Status\", last_seen_at AS \"Last Seen\" FROM iot_devices WHERE ('$device' = 'All' OR device_serial = '$device') ORDER BY last_seen_at DESC;",
+          "refId": "A"
+        }
+      ]
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["iot", "eternal", "esp32", "telemetry", "homelab"],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "All"
+        },
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-iot-db"
+        },
+        "definition": "SELECT DISTINCT device_serial FROM iot_devices UNION SELECT DISTINCT device_serial FROM iot_telemetry_logs ORDER BY 1;",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Device",
+        "multi": false,
+        "name": "device",
+        "options": [],
+        "query": "SELECT DISTINCT device_serial FROM iot_devices UNION SELECT DISTINCT device_serial FROM iot_telemetry_logs ORDER BY 1;",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {
+    "refresh_intervals": [
+      "5s",
+      "10s",
+      "30s",
+      "1m",
+      "5m"
+    ]
+  },
+  "timezone": "browser",
+  "title": "IoT Eternal - Telemetry & Security Operations",
+  "uid": "iot-eternal-overview",
+  "version": 1
+}

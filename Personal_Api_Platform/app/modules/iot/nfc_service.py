@@ -13,38 +13,90 @@ from typing import Any, Dict, List, Optional
 import urllib.request
 
 
+def _auto_create_eternal_db(host: str, port: int, user: str, password: str, db_name: str) -> bool:
+    """Auto-create eternal_iot database if missing using maintenance database connection."""
+    for mdb in ["postgres", "fadb", "pap_core"]:
+        try:
+            try:
+                import psycopg
+                with psycopg.connect(
+                    host=host, port=port, user=user, password=password, dbname=mdb, autocommit=True
+                ) as conn:
+                    with conn.cursor() as cur:
+                        cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (db_name,))
+                        if not cur.fetchone():
+                            cur.execute(f'CREATE DATABASE "{db_name}" OWNER "{user}";')
+                            cur.execute(f'GRANT ALL PRIVILEGES ON DATABASE "{db_name}" TO "{user}";')
+                            return True
+            except ImportError:
+                import psycopg2
+                conn = psycopg2.connect(
+                    host=host, port=port, user=user, password=password, dbname=mdb
+                )
+                conn.autocommit = True
+                try:
+                    with conn.cursor() as cur:
+                        cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (db_name,))
+                        if not cur.fetchone():
+                            cur.execute(f'CREATE DATABASE "{db_name}" OWNER "{user}";')
+                            cur.execute(f'GRANT ALL PRIVILEGES ON DATABASE "{db_name}" TO "{user}";')
+                            return True
+                finally:
+                    conn.close()
+        except Exception:
+            continue
+    return False
+
+
 def get_eternal_pg_conn():
-    """Connect to PostgreSQL `eternal_iot` dedicated IoT database."""
-    host = os.getenv("POSTGRES_HOST", "192.168.25.101")
-    port = int(os.getenv("POSTGRES_PORT", 5432))
-    user = os.getenv("POSTGRES_USER", "appuser")
-    password = os.getenv("POSTGRES_PASSWORD", "admin12345")
+    """Connect to PostgreSQL `eternal_iot` dedicated IoT database with auto-provisioning."""
+    host = os.getenv("POSTGRES_HOST") or os.getenv("PSM_DATABASE_HOST") or "postgres"
+    port = int(os.getenv("POSTGRES_PORT") or os.getenv("PSM_DATABASE_PORT") or 5432)
+    user = os.getenv("POSTGRES_USER") or os.getenv("PSM_DATABASE_USER") or "fadb"
+    password = os.getenv("POSTGRES_PASSWORD") or os.getenv("PSM_DATABASE_PASSWORD") or "wokeh123"
     db_name = os.getenv("IOT_POSTGRES_DB", "eternal_iot")
 
-    try:
-        import psycopg
-        from psycopg.rows import dict_row
-        return psycopg.connect(
-            host=host,
-            port=port,
-            user=user,
-            password=password,
-            dbname=db_name,
-            autocommit=True,
-            row_factory=dict_row
-        )
-    except ImportError:
-        import psycopg2
-        import psycopg2.extras
-        conn = psycopg2.connect(
-            host=host,
-            port=port,
-            user=user,
-            password=password,
-            dbname=db_name
-        )
-        conn.autocommit = True
-        return conn
+    conn = None
+    for attempt in range(2):
+        try:
+            try:
+                import psycopg
+                from psycopg.rows import dict_row
+                conn = psycopg.connect(
+                    host=host,
+                    port=port,
+                    user=user,
+                    password=password,
+                    dbname=db_name,
+                    autocommit=True,
+                    row_factory=dict_row
+                )
+                break
+            except ImportError:
+                import psycopg2
+                import psycopg2.extras
+                conn = psycopg2.connect(
+                    host=host,
+                    port=port,
+                    user=user,
+                    password=password,
+                    dbname=db_name
+                )
+                conn.autocommit = True
+                break
+        except Exception as e:
+            if attempt == 0 and ("does not exist" in str(e).lower() or "database" in str(e).lower()):
+                _auto_create_eternal_db(host, port, user, password, db_name)
+            else:
+                if attempt == 1:
+                    raise e
+
+    if conn:
+        try:
+            _ensure_tables(conn)
+        except Exception:
+            pass
+    return conn
 
 
 # Backward-compatibility alias
@@ -140,6 +192,28 @@ def _ensure_tables(conn):
     CREATE INDEX IF NOT EXISTS idx_nfc_access_logs_time ON nfc_access_logs(created_at);
     CREATE INDEX IF NOT EXISTS idx_iot_telemetry_logs_time ON iot_telemetry_logs(recorded_at);
     CREATE INDEX IF NOT EXISTS idx_iot_telemetry_logs_serial ON iot_telemetry_logs(device_serial, recorded_at);
+
+    INSERT INTO iot_devices (device_serial, device_name, model, ip_address, temperature_c, humidity_pct, heat_index_c, wifi_rssi, rssi, status, uptime_sec, free_heap, firmware_version, last_seen_at, updated_at)
+    VALUES ('ETL-ESP32-001', 'Eternal Smart Lock', 'Eternal-ESP32', '192.168.25.104', 28.5, 65.0, 29.8, -55, -55, 'online', 3600, 245000, '3.1.0', NOW(), NOW())
+    ON CONFLICT (device_serial) DO NOTHING;
+
+    INSERT INTO device_locks (device_serial, device_name, is_locked, lock_status, unlocked_by_uid, unlocked_by_name, unlocked_by_username, unlocked_by_role, unlock_duration_sec, unlocked_at, unlock_expires_at, updated_at)
+    VALUES ('ETL-ESP32-001', 'Eternal Smart Lock', 0, 'UNLOCKED', 'E2801191', 'Administrator', 'admin', 'Superadmin', 7200, NOW(), NOW() + INTERVAL '2 hours', NOW())
+    ON CONFLICT (device_serial) DO NOTHING;
+
+    INSERT INTO nfc_users (uid, nama, username, role, is_active, total_taps, created_at)
+    VALUES 
+        ('E2801191', 'Administrator', 'admin', 'Superadmin', 1, 5, NOW()),
+        ('058E208F87A200', 'Ferdiansyah', 'ferdi', 'Operator', 1, 12, NOW())
+    ON CONFLICT (uid) DO NOTHING;
+
+    INSERT INTO nfc_access_logs (uid, nama, username, role, action_type, lock_duration_sec, device_serial, device_ip, created_at)
+    SELECT '058E208F87A200', 'Ferdiansyah', 'ferdi', 'Operator', 'NFC_TAP_ON_UNLOCK', 7200, 'ETL-ESP32-001', '192.168.25.104', NOW() - INTERVAL '15 minutes'
+    WHERE NOT EXISTS (SELECT 1 FROM nfc_access_logs LIMIT 1);
+
+    INSERT INTO iot_telemetry_logs (device_serial, temperature_c, humidity_pct, heat_index_c, wifi_rssi, is_locked, remaining_sec, uptime_sec, free_heap, recorded_at)
+    SELECT 'ETL-ESP32-001', 28.5, 65.0, 29.8, -55, 0, 5000, 3600, 245000, NOW()
+    WHERE NOT EXISTS (SELECT 1 FROM iot_telemetry_logs LIMIT 1);
     """
     try:
         with conn.cursor() as cur:

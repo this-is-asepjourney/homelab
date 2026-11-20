@@ -23,10 +23,10 @@ class MqttPgConsumer:
 
     def __init__(self):
         settings = get_settings()
-        self.host = os.getenv("MQTT_HOST", getattr(settings, "MQTT_HOST", "192.168.25.101"))
-        self.port = int(os.getenv("MQTT_PORT", getattr(settings, "MQTT_PORT", 1883)))
-        self.username = os.getenv("MQTT_USERNAME", getattr(settings, "MQTT_USERNAME", "useriot"))
-        self.password = os.getenv("MQTT_PASSWORD", getattr(settings, "MQTT_PASSWORD", "25022002"))
+        self.host = os.getenv("MQTT_HOST") or getattr(settings, "MQTT_HOST", "mosquitto")
+        self.port = int(os.getenv("MQTT_PORT") or getattr(settings, "MQTT_PORT", 1883))
+        self.username = os.getenv("MQTT_USERNAME") or os.getenv("MQTT_USER") or getattr(settings, "MQTT_USERNAME", "useriot")
+        self.password = os.getenv("MQTT_PASSWORD") or getattr(settings, "MQTT_PASSWORD", "25022002")
         self.client_id = f"pap-pg-consumer-{int(time.time())}"
         self.client = None
         self.is_running = False
@@ -50,6 +50,17 @@ class MqttPgConsumer:
             ("Eternal/#", 0),
             ("+/SysCtrl", 0),
             ("pap/iot/+/telemetry", 0),
+            ("eternal/#", 0),
+            ("eternal/telemetry", 0),
+            ("/eternal/telemetry", 0),
+            ("eternal/rfid", 0),
+            ("/eternal/rfid", 0),
+            ("eternal/lock", 0),
+            ("/eternal/lock", 0),
+            ("sysctrl", 0),
+            ("/sysctrl", 0),
+            ("iot/#", 0),
+            ("iot/eternal/#", 0),
         ]
 
     def start(self):
@@ -205,6 +216,12 @@ class MqttPgConsumer:
                 except Exception as e:
                     logger.debug(f"[MQTT->PostgreSQL NFC Tap] Error: {e}")
 
+                try:
+                    from app.integrations.prometheus import record_nfc_tap_prometheus_metric
+                    record_nfc_tap_prometheus_metric(device_serial=str(device_serial), role=role)
+                except Exception:
+                    pass
+
                 # Broadcast live event to Architecture Map UI
                 try:
                     from app.modules.traffic.broadcaster import traffic_broadcaster
@@ -246,6 +263,24 @@ class MqttPgConsumer:
                 firmware=data.get("VER"),
             )
 
+            # Update live Prometheus metrics for Prometheus dashboards
+            try:
+                from app.integrations.prometheus import record_esp32_prometheus_telemetry
+                record_esp32_prometheus_telemetry(
+                    device_serial=str(device_serial),
+                    model=str(model),
+                    temperature=f["temperature"],
+                    humidity=f["humidity"],
+                    heat_index=f["heat_index"],
+                    rssi=f["rssi"],
+                    is_locked=f["is_locked"],
+                    remaining_sec=f["remaining_sec"],
+                    uptime_sec=f["uptime_sec"],
+                    free_heap=f["free_heap"],
+                )
+            except Exception:
+                pass
+
             # Broadcast live telemetry stream to Architecture Map UI
             try:
                 from app.modules.traffic.broadcaster import traffic_broadcaster
@@ -286,9 +321,9 @@ class MqttPgConsumer:
         else:
             is_locked = None
 
-        temp = _num("suhu", "temperature", "temp")
-        hum = _num("humidity", "hum", "kelembapan")
-        heat_idx = _num("heat_index", "heatIndex")
+        temp = _num("suhu", "temperature", "temp", "temperature_c", "t")
+        hum = _num("humidity", "hum", "kelembapan", "humidity_pct", "h")
+        heat_idx = _num("heat_index", "heatIndex", "heat_index_c", "hi")
         if heat_idx is None and temp is not None and temp > 0:
             heat_idx = temp
 
@@ -296,11 +331,11 @@ class MqttPgConsumer:
             "temperature": temp,
             "humidity": hum,
             "heat_index": heat_idx,
-            "rssi": _num("rssi", "wifi_rssi", cast=int),
+            "rssi": _num("rssi", "wifi_rssi", "wifiRssi", cast=int),
             "is_locked": is_locked,
-            "remaining_sec": _num("remaining_sec", cast=int),
-            "uptime_sec": _num("uptime_sec", "uptime", cast=int),
-            "free_heap": _num("free_heap", "heap", cast=int),
+            "remaining_sec": _num("remaining_sec", "lock_duration_sec", "remaining", cast=int),
+            "uptime_sec": _num("uptime_sec", "uptime", "upTime", cast=int),
+            "free_heap": _num("free_heap", "heap", "freeHeap", cast=int),
         }
 
     def _sync_pg_telemetry(

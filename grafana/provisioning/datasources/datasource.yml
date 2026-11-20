@@ -5,5 +5,41 @@ datasources:
     type: prometheus
     access: proxy
     url: http://prometheus:9090
+    uid: prometheus
     isDefault: true
+    editable: true
+
+  - name: PostgreSQL-EternalIoT
+    type: postgres
+    access: proxy
+    url: postgres:5432
+    uid: postgres-iot-db
+    user: ${POSTGRES_USER:-fadb}
+    secureJsonData:
+      password: ${POSTGRES_PASSWORD:-wokeh123}
+    database: eternal_iot
+    isDefault: false
+    jsonData:
+      sslmode: 'disable'
+      maxOpenConns: 10
+      maxIdleConns: 2
+      connMaxLifetime: 14400
+      postgresVersion: 1600
+      timescaledb: false
+    editable: true
+
+  - name: MySQL-Homelab
+    type: mysql
+    access: proxy
+    url: mysql:3306
+    uid: mysql-iot-db
+    user: ${MYSQL_USER:-fadb}
+    secureJsonData:
+      password: ${MYSQL_PASSWORD:-wokeh123}
+    database: ${MYSQL_DATABASE:-fadb}
+    isDefault: false
+    jsonData:
+      maxOpenConns: 10
+      maxIdleConns: 2
+      connMaxLifetime: 14400
     editable: true

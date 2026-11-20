@@ -882,7 +882,48 @@ async def ingest_iot_telemetry_influx(request: Request):
         extra_tags=extra_tags,
     )
 
-    # If payload also contains NFC event, record NFC metric
+    # Sync to PostgreSQL eternal_iot for persistent Grafana dashboard telemetry
+    try:
+        from app.services.mqtt_influx_consumer import mqtt_influx_consumer
+        mqtt_influx_consumer._sync_pg_telemetry(
+            device_serial=str(serial),
+            device_name=str(name),
+            model=str(payload.get("model") or "Eternal-ESP32"),
+            temp=temp,
+            hum=hum,
+            heat_idx=heat_idx,
+            rssi=rssi,
+            is_locked=is_locked,
+            rem_sec=rem_sec,
+            uptime=uptime,
+            heap=heap,
+            ip=payload.get("ip") or payload.get("MCIP"),
+            mac=payload.get("mac") or payload.get("MAC"),
+            ssid=payload.get("ap") or payload.get("ssid"),
+            firmware=payload.get("VER"),
+        )
+    except Exception:
+        pass
+
+    # Update Prometheus metrics
+    try:
+        from app.integrations.prometheus import record_esp32_prometheus_telemetry
+        record_esp32_prometheus_telemetry(
+            device_serial=str(serial),
+            model=str(payload.get("model") or "Eternal-ESP32"),
+            temperature=temp,
+            humidity=hum,
+            heat_index=heat_idx,
+            rssi=rssi,
+            is_locked=is_locked,
+            remaining_sec=rem_sec,
+            uptime_sec=uptime,
+            free_heap=heap,
+        )
+    except Exception:
+        pass
+
+    # If payload also contains NFC event, record NFC metric and audit log
     if "uid" in payload:
         uid = str(payload["uid"])
         user_name = payload.get("nama") or "Tamu"
@@ -897,6 +938,25 @@ async def ingest_iot_telemetry_influx(request: Request):
             duration_sec=rem_sec or 7200,
             status=payload.get("status", "granted")
         )
+        try:
+            from app.integrations.prometheus import record_nfc_tap_prometheus_metric
+            record_nfc_tap_prometheus_metric(device_serial=str(serial), role=role)
+        except Exception:
+            pass
+        try:
+            from app.modules.iot.nfc_service import NfcService
+            NfcService.record_tap_event({
+                "uid": uid,
+                "nama": user_name,
+                "username": payload.get("username") or "-",
+                "role": role,
+                "action_type": action,
+                "lock_duration_sec": rem_sec or 7200,
+                "device_serial": str(serial),
+                "device_ip": str(payload.get("ip") or "192.168.25.104"),
+            })
+        except Exception:
+            pass
 
     return {
         "status": "success" if ok else "warning",
