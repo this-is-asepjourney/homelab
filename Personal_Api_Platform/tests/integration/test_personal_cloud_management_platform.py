@@ -316,3 +316,65 @@ def test_local_dns_service_and_private_domains(monkeypatch, tmp_path):
     assert not vhost_file.exists()
     hosts_after = hosts_file.read_text(encoding="utf-8")
     assert not any(ln.strip().endswith(" pos-main.homelab") for ln in hosts_after.splitlines())
+
+
+def test_local_dns_maintenance_mode_vhost(monkeypatch, tmp_path):
+    """Tests Nginx maintenance vhost generation, HTML page rendering, list_domains parsing, and restoration."""
+    from app.modules.dns.service import DnsService
+
+    monkeypatch.setenv("DNS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("SERVER_LAN_IP", "192.168.25.105")
+    monkeypatch.setenv("SERVER_TS_IP", "100.78.113.53")
+
+    # 1. Enable maintenance mode on route registration
+    reg = DnsService.register_domain_route(
+        domain="stock-umkm.homelab",
+        target_port=3101,
+        target_host="host.docker.internal",
+        project_name="stock_umkm",
+        maintenance_mode=True,
+        maintenance_title="Upgrade Stok & Kasir <script>bad()</script>",
+        maintenance_message="Sedang update modul laporan keuangan.",
+        maintenance_eta="15:00 WIB",
+        retry_after=120,
+    )
+    assert reg["success"] is True
+    assert reg["maintenance_mode"] is True
+
+    vhost_file = tmp_path / "router" / "conf.d" / "projects" / "stock-umkm.homelab.conf"
+    maint_file = tmp_path / "router" / "conf.d" / "maintenance" / "stock-umkm.homelab.html"
+    assert vhost_file.exists()
+    assert maint_file.exists()
+
+    vhost_text = vhost_file.read_text(encoding="utf-8")
+    assert "MAINTENANCE MODE" in vhost_text
+    assert "return 503;" in vhost_text
+    assert "alias /etc/nginx/conf.d/maintenance/stock-umkm.homelab.html;" in vhost_text
+    assert "add_header Retry-After 120 always;" in vhost_text
+
+    html_text = maint_file.read_text(encoding="utf-8")
+    assert "UNDER MAINTENANCE" in html_text
+    assert "&lt;script&gt;bad()&lt;/script&gt;" in html_text
+    assert "<script>bad()" not in html_text
+    assert "15:00 WIB" in html_text
+
+    # 2. list_domains should preserve the project entry and flag maintenance_mode=True
+    domains = DnsService.list_domains()
+    matched = [d for d in domains if d["domain"] == "stock-umkm.homelab"]
+    assert len(matched) == 1
+    assert matched[0]["maintenance_mode"] is True
+    assert "host.docker.internal:3101" in matched[0]["target"]
+
+    # 3. Disable maintenance mode -> restores proxy_pass and removes maintenance HTML
+    reg_off = DnsService.register_domain_route(
+        domain="stock-umkm.homelab",
+        target_port=3101,
+        target_host="host.docker.internal",
+        project_name="stock_umkm",
+        maintenance_mode=False,
+    )
+    assert reg_off["maintenance_mode"] is False
+    assert not maint_file.exists()
+    restored_vhost = vhost_file.read_text(encoding="utf-8")
+    assert "proxy_pass http://host.docker.internal:3101;" in restored_vhost
+    assert "return 503;" not in restored_vhost

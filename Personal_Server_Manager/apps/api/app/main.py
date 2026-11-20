@@ -51,6 +51,10 @@ def init_db():
                 ("domain", "VARCHAR(255)"),
                 ("db_type", "VARCHAR(50) DEFAULT 'none'"),
                 ("db_name", "VARCHAR(100)"),
+                ("maintenance_mode", "BOOLEAN DEFAULT FALSE"),
+                ("maintenance_title", "VARCHAR(255)"),
+                ("maintenance_message", "TEXT"),
+                ("maintenance_eta", "VARCHAR(120)"),
             ]:
                 try:
                     conn.execute(text(f"ALTER TABLE projects ADD COLUMN IF NOT EXISTS {col} {col_type};"))

@@ -330,6 +330,26 @@ export const api = {
     return res.json();
   },
 
+  async setProjectMaintenance(
+    id: string,
+    data: {
+      enabled: boolean;
+      title?: string;
+      message?: string;
+      eta?: string;
+      retry_after?: number;
+    }
+  ) {
+    const res = await fetchWithAuth(`/api/v1/projects/${id}/maintenance`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+    if (!res.ok) {
+      throw new Error(await extractApiErrorMessage(res, 'Failed to update project maintenance mode'));
+    }
+    return res.json();
+  },
+
   async deleteProject(id: string) {
     const res = await fetchWithAuth(`/api/v1/projects/${id}`, { method: 'DELETE' });
     return res.json();

@@ -1,10 +1,10 @@
 #!/bin/sh
 set -e
 
-mkdir -p /etc/nginx/conf.d/projects
+mkdir -p /etc/nginx/conf.d/projects /etc/nginx/conf.d/maintenance 2>/dev/null || true
 
 calc_hash() {
-    find /etc/nginx/conf.d -type f -name '*.conf' -exec sha256sum {} + 2>/dev/null | sort | sha256sum | awk '{print $1}'
+    find /etc/nginx/conf.d -type f \( -name '*.conf' -o -name '*.html' \) -exec sha256sum {} + 2>/dev/null | sort | sha256sum | awk '{print $1}'
 }
 
 nginx -g "daemon off;" &

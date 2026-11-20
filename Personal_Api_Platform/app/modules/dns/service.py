@@ -1,3 +1,4 @@
+
 """Homelab Local DNS & Dynamic Virtual Host Router Service.
 
 Manages:
@@ -6,6 +7,7 @@ Manages:
 3. Client hosts file export for zero-config LAN devices
 """
 
+import html
 import logging
 import os
 import re
@@ -139,6 +141,166 @@ class DnsService:
         return _resolve_existing_dir("router/conf.d/projects")
 
     @classmethod
+    def get_maintenance_dir(cls) -> Path:
+        return _resolve_existing_dir("router/conf.d/maintenance")
+
+    @classmethod
+    def render_maintenance_html(
+        cls,
+        project_name: str,
+        domain: str,
+        title: Optional[str] = None,
+        message: Optional[str] = None,
+        eta: Optional[str] = None,
+    ) -> str:
+        """Render a standalone XSS-safe HTTP 503 Maintenance HTML page with inline CSS/SVG."""
+        safe_project = html.escape((project_name or domain or "Aplikasi").strip())
+        safe_domain = html.escape((domain or "").strip())
+        safe_title = html.escape((title or "").strip() or "Sedang Dalam Pemeliharaan")
+        safe_message = html.escape(
+            (message or "").strip()
+            or "Kami sedang melakukan pembaruan dan peningkatan sistem untuk memberikan layanan terbaik. Silakan coba kembali beberapa saat lagi."
+        )
+        safe_eta = html.escape((eta or "").strip()) if (eta or "").strip() else ""
+        eta_block = (
+            f'<div class="eta-box"><span>Estimasi Selesai:</span> <strong>{safe_eta}</strong></div>'
+            if safe_eta
+            else ""
+        )
+
+        return f"""<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate" />
+  <title>{safe_title} - {safe_project}</title>
+  <style>
+    * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+    body {{
+      min-height: 100vh;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: radial-gradient(circle at top, #1e293b 0%, #090d16 65%);
+      color: #e2e8f0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }}
+    .card {{
+      width: 100%;
+      max-width: 560px;
+      background: rgba(15, 23, 42, 0.92);
+      border: 1px solid rgba(245, 158, 11, 0.35);
+      border-radius: 20px;
+      padding: 36px 32px;
+      box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
+      text-align: center;
+    }}
+    .icon-wrap {{
+      width: 68px;
+      height: 68px;
+      margin: 0 auto 20px;
+      border-radius: 18px;
+      background: rgba(245, 158, 11, 0.14);
+      border: 1px solid rgba(245, 158, 11, 0.35);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fbbf24;
+    }}
+    .badge {{
+      display: inline-block;
+      padding: 5px 12px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      background: rgba(245, 158, 11, 0.15);
+      color: #fcd34d;
+      border: 1px solid rgba(245, 158, 11, 0.3);
+      margin-bottom: 14px;
+    }}
+    .project-name {{
+      font-size: 13px;
+      color: #94a3b8;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      margin-bottom: 8px;
+    }}
+    h1 {{
+      font-size: 24px;
+      font-weight: 800;
+      color: #f8fafc;
+      margin-bottom: 14px;
+      line-height: 1.3;
+    }}
+    .message {{
+      font-size: 14px;
+      line-height: 1.7;
+      color: #cbd5e1;
+      margin-bottom: 22px;
+      white-space: pre-line;
+    }}
+    .eta-box {{
+      display: inline-block;
+      padding: 10px 16px;
+      border-radius: 12px;
+      background: rgba(59, 130, 246, 0.12);
+      border: 1px solid rgba(59, 130, 246, 0.3);
+      color: #93c5fd;
+      font-size: 13px;
+      margin-bottom: 22px;
+    }}
+    .actions {{
+      display: flex;
+      justify-content: center;
+      gap: 12px;
+    }}
+    .btn {{
+      appearance: none;
+      border: 1px solid rgba(245, 158, 11, 0.4);
+      background: #f59e0b;
+      color: #090d16;
+      font-weight: 700;
+      font-size: 13px;
+      padding: 10px 20px;
+      border-radius: 12px;
+      cursor: pointer;
+    }}
+    .btn:hover {{ background: #fbbf24; }}
+    .footer {{
+      margin-top: 24px;
+      padding-top: 16px;
+      border-top: 1px solid rgba(148, 163, 184, 0.15);
+      font-size: 11px;
+      color: #64748b;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }}
+  </style>
+</head>
+<body>
+  <main class="card">
+    <div class="icon-wrap">
+      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
+      </svg>
+    </div>
+    <div class="badge">UNDER MAINTENANCE</div>
+    <div class="project-name">{safe_project}{f" &bull; {safe_domain}" if safe_domain and safe_domain != safe_project else ""}</div>
+    <h1>{safe_title}</h1>
+    <p class="message">{safe_message}</p>
+    {eta_block}
+    <div class="actions">
+      <button type="button" class="btn" onclick="window.location.reload()">Muat Ulang Halaman</button>
+    </div>
+    <div class="footer">HTTP 503 Service Unavailable &bull; Homelab Ingress Maintenance</div>
+  </main>
+</body>
+</html>
+"""
+
+    @classmethod
     def sanitize_domain(cls, raw: str) -> str:
         """Normalize a domain or bare project name into a safe hostname.
 
@@ -184,10 +346,13 @@ class DnsService:
                     text = conf_file.read_text(encoding="utf-8")
                     srv_match = re.search(r"server_name\s+([^;]+);", text)
                     proxy_match = re.search(r"proxy_pass\s+([^;]+);", text)
-                    if srv_match and proxy_match:
+                    upstream_match = re.search(r"#\s*upstream:\s*([^\s]+)", text)
+                    if srv_match and (proxy_match or upstream_match):
                         domain_names = srv_match.group(1).strip().split()
                         primary_domain = domain_names[0] if domain_names else conf_file.stem
-                        proxy_target = proxy_match.group(1).replace("http://", "").strip()
+                        raw_target = proxy_match.group(1) if proxy_match else upstream_match.group(1)
+                        proxy_target = raw_target.replace("http://", "").strip()
+                        is_maint = "MAINTENANCE MODE" in text
                         results.append({
                             "domain": primary_domain,
                             "url": f"http://{primary_domain}",
@@ -195,6 +360,7 @@ class DnsService:
                             "category": "Project App",
                             "description": f"Deployed Project ({conf_file.stem})",
                             "is_system": False,
+                            "maintenance_mode": is_maint,
                             "ip_lan": host_ip,
                             "ip_tailscale": tailscale_ip,
                         })
@@ -210,16 +376,60 @@ class DnsService:
         target_port: int,
         target_host: str = "host.docker.internal",
         project_name: Optional[str] = None,
+        maintenance_mode: bool = False,
+        maintenance_title: Optional[str] = None,
+        maintenance_message: Optional[str] = None,
+        maintenance_eta: Optional[str] = None,
+        retry_after: int = 60,
     ) -> Dict[str, Any]:
-        """Creates an Nginx virtual host for domain and adds DNS host mapping."""
+        """Creates an Nginx virtual host for domain (or 503 maintenance page) and adds DNS host mapping."""
         clean_domain = cls.sanitize_domain(domain)
         slug = project_name or clean_domain.replace(".homelab", "").replace(".local", "")
         vhost_dir = cls.get_projects_vhost_dir()
         vhost_file = vhost_dir / f"{clean_domain}.conf"
+        maint_dir = cls.get_maintenance_dir()
+        maint_file = maint_dir / f"{clean_domain}.html"
         lan_ip = _get_lan_ip()
+        safe_retry = max(5, int(retry_after or 60))
 
-        # 1. Write static Nginx virtual host config (keep literal target_host so /etc/hosts extra_hosts applies)
-        conf_content = f"""# Virtual Host for Project: {slug}
+        # 1. Write static Nginx virtual host config (either Maintenance 503 or upstream proxy)
+        if maintenance_mode:
+            html_body = cls.render_maintenance_html(
+                project_name=slug,
+                domain=clean_domain,
+                title=maintenance_title,
+                message=maintenance_message,
+                eta=maintenance_eta,
+            )
+            maint_file.write_text(html_body, encoding="utf-8")
+            conf_content = f"""# Virtual Host for Project: {slug} (MAINTENANCE MODE)
+# upstream: http://{target_host}:{target_port}
+server {{
+    listen 80;
+    server_name {clean_domain};
+
+    error_page 503 /__maintenance__.html;
+
+    location / {{
+        return 503;
+    }}
+
+    location = /__maintenance__.html {{
+        internal;
+        alias /etc/nginx/conf.d/maintenance/{clean_domain}.html;
+        default_type text/html;
+        add_header Retry-After {safe_retry} always;
+        add_header Cache-Control "no-store, no-cache, must-revalidate" always;
+    }}
+}}
+"""
+        else:
+            if maint_file.exists():
+                try:
+                    maint_file.unlink()
+                except Exception:
+                    pass
+            conf_content = f"""# Virtual Host for Project: {slug}
 server {{
     listen 80;
     server_name {clean_domain};
@@ -271,23 +481,26 @@ server {{
             "url": f"http://{clean_domain}",
             "target": f"{target_host}:{target_port}",
             "lan_ip": lan_ip,
+            "maintenance_mode": bool(maintenance_mode),
             "config_file": str(vhost_file),
         }
 
     @classmethod
     def remove_domain_route(cls, domain: str) -> bool:
-        """Removes a virtual host config and DNS mapping."""
+        """Removes a virtual host config, maintenance HTML page, and DNS mapping."""
         clean_domain = cls.sanitize_domain(domain)
         vhost_dir = cls.get_projects_vhost_dir()
         vhost_file = vhost_dir / f"{clean_domain}.conf"
+        maint_file = cls.get_maintenance_dir() / f"{clean_domain}.html"
         removed = False
 
-        if vhost_file.exists():
-            try:
-                vhost_file.unlink()
-                removed = True
-            except Exception:
-                pass
+        for fpath in (vhost_file, maint_file):
+            if fpath.exists():
+                try:
+                    fpath.unlink()
+                    removed = True
+                except Exception:
+                    pass
 
         # Clean exact host entry from homelab.hosts
         hosts_file = cls.get_hosts_file_path()

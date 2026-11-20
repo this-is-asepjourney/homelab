@@ -5,6 +5,7 @@ import secrets
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 from apps.api.app.core.config import settings
 from apps.api.app.database.session import get_db
@@ -23,6 +24,7 @@ from apps.api.app.models.entities import (
 from apps.api.app.schemas.all_schemas import (
     ProjectCreate,
     ProjectUpdate,
+    ProjectMaintenanceRequest,
     ProjectResponse,
     ProjectDatabaseProvisionRequest,
     DockerfileGenerateRequest,
@@ -35,6 +37,10 @@ from apps.api.app.schemas.all_schemas import (
     ContainerResponse,
 )
 from apps.api.app.services.audit_service import log_activity
+from apps.api.app.services.maintenance_service import (
+    render_maintenance_html,
+    apply_container_maintenance,
+)
 from apps.api.app.services.pap_client import (
     extract_host_port,
     remove_domain_routing,
@@ -222,12 +228,51 @@ def _build_project_response(p: Project, deployment_id: Optional[str] = None) -> 
         domain=effective_domain,
         db_type=p.db_type or "none",
         db_name=p.db_name,
+        maintenance_mode=bool(getattr(p, "maintenance_mode", False) or p.status == "maintenance"),
+        maintenance_title=getattr(p, "maintenance_title", None),
+        maintenance_message=getattr(p, "maintenance_message", None),
+        maintenance_eta=getattr(p, "maintenance_eta", None),
         server_ip=lan_ip,
         server_tailscale_ip=ts_ip,
         access_urls=access_urls,
         deployment_id=deployment_id,
         created_at=p.created_at,
     )
+
+
+def _sync_project_maintenance_targets(p: Project, retry_after: int = 60) -> Dict[str, Any]:
+    eff_domain = resolve_effective_domain(p.domain, p.name)
+    hp = extract_host_port(p.port_mappings)
+    is_maint = bool(getattr(p, "maintenance_mode", False) or p.status == "maintenance")
+    html_content = render_maintenance_html(
+        project_name=p.name,
+        domain=eff_domain,
+        title=getattr(p, "maintenance_title", None),
+        message=getattr(p, "maintenance_message", None),
+        eta=getattr(p, "maintenance_eta", None),
+    )
+    router_synced = sync_domain_routing(
+        domain=eff_domain,
+        target_port=hp,
+        project_name=p.name,
+        maintenance_mode=is_maint,
+        maintenance_title=getattr(p, "maintenance_title", None),
+        maintenance_message=getattr(p, "maintenance_message", None),
+        maintenance_eta=getattr(p, "maintenance_eta", None),
+        retry_after=retry_after,
+    )
+    container_sync = apply_container_maintenance(
+        project=p,
+        enabled=is_maint,
+        html_content=html_content,
+        retry_after=retry_after,
+    )
+    return {
+        "eff_domain": eff_domain,
+        "target_port": hp,
+        "router_synced": router_synced,
+        "container_sync": container_sync,
+    }
 
 
 @router.get("", response_model=List[ProjectResponse])
@@ -707,7 +752,15 @@ async def execute_project_redeploy(
     try:
         eff_domain = resolve_effective_domain(project.domain, project.name)
         hp = extract_host_port(project.port_mappings)
-        sync_domain_routing(domain=eff_domain, target_port=hp, project_name=project.name)
+        sync_domain_routing(
+            domain=eff_domain,
+            target_port=hp,
+            project_name=project.name,
+            maintenance_mode=bool(getattr(project, "maintenance_mode", False)),
+            maintenance_title=getattr(project, "maintenance_title", None),
+            maintenance_message=getattr(project, "maintenance_message", None),
+            maintenance_eta=getattr(project, "maintenance_eta", None),
+        )
     except Exception:
         pass
 
@@ -784,6 +837,15 @@ async def update_project(
             pass
     if payload.db_name is not None:
         p.db_name = payload.db_name
+    if payload.maintenance_mode is not None:
+        p.maintenance_mode = bool(payload.maintenance_mode)
+        p.status = "maintenance" if p.maintenance_mode else "active"
+    if payload.maintenance_title is not None:
+        p.maintenance_title = payload.maintenance_title.strip() or None
+    if payload.maintenance_message is not None:
+        p.maintenance_message = payload.maintenance_message.strip() or None
+    if payload.maintenance_eta is not None:
+        p.maintenance_eta = payload.maintenance_eta.strip() or None
 
     src = p.source
     if src:
@@ -803,14 +865,22 @@ async def update_project(
     db.commit()
     db.refresh(p)
 
-    # Sync DNS & Ingress Routing if domain or ports changed
+    # Sync DNS, Ingress Routing & direct container maintenance if domain/port/maintenance changed
     new_domain = resolve_effective_domain(p.domain, p.name)
-    if payload.port_mappings is not None or payload.domain is not None:
+    maint_touched = any(
+        val is not None
+        for val in (
+            payload.maintenance_mode,
+            payload.maintenance_title,
+            payload.maintenance_message,
+            payload.maintenance_eta,
+        )
+    )
+    if payload.port_mappings is not None or payload.domain is not None or maint_touched:
         try:
             if old_domain and old_domain != new_domain:
                 remove_domain_routing(old_domain)
-            hp = extract_host_port(p.port_mappings)
-            sync_domain_routing(domain=new_domain, target_port=hp, project_name=p.name)
+            _sync_project_maintenance_targets(p)
         except Exception:
             pass
 
@@ -833,6 +903,96 @@ async def update_project(
     return _build_project_response(p, deployment_id=deployment_id)
 
 
+@router.post("/{project_id}/maintenance")
+def set_project_maintenance(
+    project_id: str,
+    payload: ProjectMaintenanceRequest,
+    current_user: User = Depends(require_role("owner", "admin", "operator")),
+    db: Session = Depends(get_db),
+):
+    """Enable or disable Maintenance Mode for a project and configure its maintenance page."""
+    p = db.query(Project).filter(Project.id == project_id).first()
+    if not p:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    p.maintenance_mode = bool(payload.enabled)
+    p.status = "maintenance" if payload.enabled else "active"
+    if payload.title is not None:
+        p.maintenance_title = payload.title.strip() or None
+    if payload.message is not None:
+        p.maintenance_message = payload.message.strip() or None
+    if payload.eta is not None:
+        p.maintenance_eta = payload.eta.strip() or None
+
+    db.commit()
+    db.refresh(p)
+
+    sync_res = _sync_project_maintenance_targets(p, retry_after=payload.retry_after)
+    container_sync = sync_res["container_sync"]
+
+    log_activity(
+        db,
+        action="project.maintenance_toggle",
+        resource_type="project",
+        resource_id=p.id,
+        user_id=current_user.id,
+        details={
+            "project": p.name,
+            "enabled": p.maintenance_mode,
+            "router_synced": sync_res["router_synced"],
+            "container_driver": container_sync.get("driver"),
+        },
+    )
+
+    state_label = "DIAKTIFKAN (HTTP 503)" if p.maintenance_mode else "DINONAKTIFKAN (ONLINE)"
+    extra_note = (
+        " Container Laravel juga masuk mode maintenance (IP:Port langsung)."
+        if container_sync.get("applied")
+        else (
+            " Berlaku pada domain Nginx Ingress (:80)."
+            if sync_res["router_synced"]
+            else ""
+        )
+    )
+
+    return {
+        "success": True,
+        "project": _build_project_response(p),
+        "maintenance_mode": p.maintenance_mode,
+        "maintenance_title": p.maintenance_title,
+        "maintenance_message": p.maintenance_message,
+        "maintenance_eta": p.maintenance_eta,
+        "router_synced": sync_res["router_synced"],
+        "container_sync": container_sync,
+        "preview_url": f"/api/v1/projects/{p.id}/maintenance/preview",
+        "message": f"Mode Maintenance project '{p.name}' {state_label}.{extra_note}",
+    }
+
+
+@router.get("/{project_id}/maintenance/preview", response_class=HTMLResponse)
+def preview_project_maintenance_page(
+    project_id: str,
+    title: Optional[str] = None,
+    message: Optional[str] = None,
+    eta: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """Render public HTML preview of this project's maintenance page (no secrets exposed)."""
+    p = db.query(Project).filter(Project.id == project_id).first()
+    if not p:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    eff_domain = resolve_effective_domain(p.domain, p.name)
+    html_content = render_maintenance_html(
+        project_name=p.name,
+        domain=eff_domain,
+        title=title if (title is not None and title != "") else p.maintenance_title,
+        message=message if (message is not None and message != "") else p.maintenance_message,
+        eta=eta if (eta is not None and eta != "") else p.maintenance_eta,
+    )
+    return HTMLResponse(content=html_content, status_code=200)
+
+
 @router.post("/{project_id}/sync-domain")
 def sync_project_domain_endpoint(
     project_id: str,
@@ -851,7 +1011,15 @@ def sync_project_domain_endpoint(
         db.refresh(p)
 
     hp = extract_host_port(p.port_mappings)
-    synced = sync_domain_routing(domain=eff_domain, target_port=hp, project_name=p.name)
+    synced = sync_domain_routing(
+        domain=eff_domain,
+        target_port=hp,
+        project_name=p.name,
+        maintenance_mode=bool(getattr(p, "maintenance_mode", False)),
+        maintenance_title=getattr(p, "maintenance_title", None),
+        maintenance_message=getattr(p, "maintenance_message", None),
+        maintenance_eta=getattr(p, "maintenance_eta", None),
+    )
     resp = _build_project_response(p)
     return {
         "success": synced,

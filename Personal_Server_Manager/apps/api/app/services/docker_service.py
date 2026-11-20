@@ -3,7 +3,7 @@ import logging
 import os
 import re
 import subprocess
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("psm.docker")
 
@@ -224,6 +224,52 @@ class DockerEngineService:
             return res.returncode == 0
         except Exception:
             return False
+
+    @classmethod
+    def exec_in_container(cls, cid_or_name: str, cmd: List[str], timeout: int = 8) -> Tuple[int, str]:
+        """Execute a command inside a running Docker container via Engine UDS API or CLI fallback."""
+        client = cls._get_uds_client()
+        if client:
+            try:
+                create_resp = client.post(
+                    f"/containers/{cid_or_name}/exec",
+                    json={
+                        "AttachStdout": True,
+                        "AttachStderr": True,
+                        "Cmd": cmd,
+                    },
+                    timeout=float(timeout),
+                )
+                if create_resp.status_code in (200, 201):
+                    exec_id = create_resp.json().get("Id")
+                    if exec_id:
+                        start_resp = client.post(
+                            f"/exec/{exec_id}/start",
+                            json={"Detach": False, "Tty": False},
+                            timeout=float(timeout),
+                        )
+                        insp_resp = client.get(f"/exec/{exec_id}/json", timeout=float(timeout))
+                        exit_code = (
+                            insp_resp.json().get("ExitCode", 0)
+                            if insp_resp.status_code == 200
+                            else (0 if start_resp.status_code == 200 else 1)
+                        )
+                        output = decode_docker_stream(start_resp.content)
+                        return int(exit_code if exit_code is not None else 0), output
+            except Exception as e:
+                logger.warning("UDS exec error for %s: %s", cid_or_name, e)
+
+        try:
+            res = subprocess.run(
+                ["docker", "exec", cid_or_name, *cmd],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                timeout=timeout,
+            )
+            return int(res.returncode), res.stdout or ""
+        except Exception as e:
+            return 1, str(e)
 
     @classmethod
     def find_container_by_project(

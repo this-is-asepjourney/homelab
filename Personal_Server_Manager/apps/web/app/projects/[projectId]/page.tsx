@@ -43,8 +43,9 @@ import {
   Save,
   AlertCircle,
   RotateCcw,
+  Wrench,
 } from 'lucide-react';
-import { api, formatBytes } from '../../../lib/api';
+import { api, formatBytes, getApiBase } from '../../../lib/api';
 import { resolveProjectAccess } from '../../../lib/utils';
 import { DeployProjectModal } from '../../../components/deploy-project-modal';
 
@@ -131,6 +132,13 @@ export default function ProjectDetailPage() {
   const [syncingDomain, setSyncingDomain] = useState(false);
   const [domainSyncMsg, setDomainSyncMsg] = useState<string | null>(null);
   const [copiedAccessKey, setCopiedAccessKey] = useState<'domain' | 'lan' | 'ts' | null>(null);
+  const [maintenanceMode, setMaintenanceMode] = useState(false);
+  const [maintenanceTitle, setMaintenanceTitle] = useState('');
+  const [maintenanceMessage, setMaintenanceMessage] = useState('');
+  const [maintenanceEta, setMaintenanceEta] = useState('');
+  const [savingMaintenance, setSavingMaintenance] = useState(false);
+  const [maintenanceNotice, setMaintenanceNotice] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [showMaintenancePreview, setShowMaintenancePreview] = useState(false);
 
   const fetchContainerLogs = async () => {
     try {
@@ -180,6 +188,10 @@ export default function ProjectDetailPage() {
       setProjectBranch(p?.branch || 'main');
       setProjectRepoUrl(p?.repository_url || '');
       setProjectDockerfilePath(p?.dockerfile_path || 'Dockerfile');
+      setMaintenanceMode(Boolean(p?.maintenance_mode || p?.status === 'maintenance'));
+      setMaintenanceTitle(p?.maintenance_title || '');
+      setMaintenanceMessage(p?.maintenance_message || '');
+      setMaintenanceEta(p?.maintenance_eta || '');
       setDeployments(d);
       setEnvVars(env);
       setBulkEnvText(
@@ -679,6 +691,53 @@ export default function ProjectDetailPage() {
     }
   };
 
+  const buildMaintenancePreviewUrl = () => {
+    const base = `${getApiBase()}/api/v1/projects/${projectId}/maintenance/preview`;
+    const qs = new URLSearchParams();
+    if (maintenanceTitle.trim()) qs.set('title', maintenanceTitle.trim());
+    if (maintenanceMessage.trim()) qs.set('message', maintenanceMessage.trim());
+    if (maintenanceEta.trim()) qs.set('eta', maintenanceEta.trim());
+    const qStr = qs.toString();
+    return qStr ? `${base}?${qStr}` : base;
+  };
+
+  const handleToggleMaintenance = async (enabled: boolean) => {
+    try {
+      setSavingMaintenance(true);
+      setMaintenanceNotice(null);
+      const res = await api.setProjectMaintenance(projectId, {
+        enabled,
+        title: maintenanceTitle.trim(),
+        message: maintenanceMessage.trim(),
+        eta: maintenanceEta.trim(),
+        retry_after: 60,
+      });
+      const details: string[] = [];
+      if (res?.router_synced) {
+        details.push('Nginx Ingress (:80) tersinkron');
+      }
+      if (res?.container_sync?.applied) {
+        details.push(`Container Laravel (${res.container_sync.driver})`);
+      } else if (res?.container_sync?.reason) {
+        details.push(res.container_sync.reason);
+      }
+      setMaintenanceNotice({
+        type: 'success',
+        text: `${res?.message || (enabled ? 'Mode Maintenance diaktifkan.' : 'Mode Maintenance dinonaktifkan.')}${
+          details.length > 0 ? ` (${details.join(' • ')})` : ''
+        }`,
+      });
+      await loadData();
+    } catch (err: any) {
+      setMaintenanceNotice({
+        type: 'error',
+        text: err.message || 'Gagal memperbarui Mode Maintenance project.',
+      });
+    } finally {
+      setSavingMaintenance(false);
+    }
+  };
+
   if (!project && !loading) {
     return <div className="p-8 text-center text-gray-500">Project not found.</div>;
   }
@@ -743,9 +802,21 @@ export default function ProjectDetailPage() {
           <div>
             <div className="flex items-center gap-2.5 flex-wrap">
               <h1 className="text-xl font-bold text-foreground">{project?.name || 'Project'}</h1>
-              <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
-                {project?.status}
-              </span>
+              {(project?.maintenance_mode || project?.status === 'maintenance') ? (
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('settings')}
+                  className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase bg-amber-500/15 text-amber-400 border border-amber-500/30 hover:bg-amber-500/25 transition-colors"
+                  title="Klik untuk membuka pengaturan Maintenance"
+                >
+                  <Wrench className="w-3 h-3" />
+                  <span>MAINTENANCE</span>
+                </button>
+              ) : (
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
+                  {project?.status}
+                </span>
+              )}
               {containerInfo && (
                 <button
                   onClick={() => setActiveTab('terminal')}
@@ -830,6 +901,55 @@ export default function ProjectDetailPage() {
           </button>
         </div>
       </div>
+
+      {/* Prominent Active Maintenance Banner */}
+      {(project?.maintenance_mode || project?.status === 'maintenance') && (
+        <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <div className="p-2 rounded-lg bg-amber-500/20 text-amber-400 border border-amber-500/30 shrink-0 mt-0.5">
+              <Wrench className="w-4 h-4" />
+            </div>
+            <div className="space-y-1 text-xs">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="font-bold text-amber-300">Mode Maintenance Sedang Aktif (HTTP 503)</span>
+                {project?.maintenance_eta && (
+                  <span className="px-2 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-200 font-mono text-[10px]">
+                    ETA: {project.maintenance_eta}
+                  </span>
+                )}
+              </div>
+              <div className="text-foreground font-semibold">
+                {project?.maintenance_title || 'Sedang Dalam Pemeliharaan'}
+              </div>
+              <p className="text-gray-300">
+                {project?.maintenance_message ||
+                  'Kami sedang melakukan pembaruan dan peningkatan sistem untuk memberikan layanan terbaik. Silakan coba kembali beberapa saat lagi.'}
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 flex-wrap shrink-0">
+            <a
+              href={buildMaintenancePreviewUrl()}
+              target="_blank"
+              rel="noreferrer"
+              className="px-3 py-1.5 rounded-lg border border-amber-500/40 bg-background/60 hover:bg-background text-amber-300 text-xs font-semibold flex items-center gap-1.5 transition-colors"
+            >
+              <Eye className="w-3.5 h-3.5" />
+              <span>Preview Halaman</span>
+              <ExternalLink className="w-3 h-3" />
+            </a>
+            <button
+              type="button"
+              disabled={savingMaintenance}
+              onClick={() => handleToggleMaintenance(false)}
+              className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center gap-1.5 disabled:opacity-50 transition-colors"
+            >
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              <span>{savingMaintenance ? 'Memproses...' : 'Nonaktifkan Maintenance'}</span>
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Access Endpoints Card: Domain Pribadi & Direct IP:Port */}
       <div className="rounded-xl border border-border bg-card p-4 shadow-sm">
@@ -2609,6 +2729,181 @@ export default function ProjectDetailPage() {
               <span>{projectUpdateSuccessMsg}</span>
             </div>
           )}
+
+          {/* Card 0: Mode Maintenance & Halaman Pemeliharaan */}
+          <div className={`rounded-xl border bg-card p-5 space-y-4 text-xs ${maintenanceMode ? 'border-amber-500/40' : 'border-border'}`}>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-border pb-4">
+              <div className="flex items-start gap-3">
+                <div className={`p-2 rounded-lg border ${maintenanceMode ? 'bg-amber-500/15 text-amber-400 border-amber-500/30' : 'bg-blue-500/10 text-blue-400 border-blue-500/20'}`}>
+                  <Wrench className="w-4 h-4" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="font-bold text-sm text-foreground">Mode Maintenance &amp; Halaman Pemeliharaan</h3>
+                    <span
+                      className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase border ${
+                        maintenanceMode
+                          ? 'bg-amber-500/15 text-amber-400 border-amber-500/30'
+                          : 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20'
+                      }`}
+                    >
+                      {maintenanceMode ? 'AKTIF (503)' : 'NONAKTIF (ONLINE)'}
+                    </span>
+                  </div>
+                  <p className="text-gray-400 mt-0.5">
+                    Tampilkan halaman informasi pemeliharaan (HTTP 503) kepada pengunjung tanpa mematikan container project.
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                disabled={savingMaintenance}
+                onClick={() => handleToggleMaintenance(!maintenanceMode)}
+                className={`relative inline-flex items-center gap-2 px-3.5 py-2 rounded-xl font-semibold text-xs border transition-all self-start disabled:opacity-50 ${
+                  maintenanceMode
+                    ? 'bg-amber-500/15 border-amber-500/40 text-amber-300 hover:bg-amber-500/25'
+                    : 'bg-background border-border text-gray-300 hover:border-amber-500/40 hover:text-amber-300'
+                }`}
+              >
+                <span className={`w-2.5 h-2.5 rounded-full ${maintenanceMode ? 'bg-amber-400 animate-pulse' : 'bg-emerald-500'}`} />
+                <span>{maintenanceMode ? 'Status: ON (Klik untuk Matikan)' : 'Status: OFF (Klik untuk Aktifkan)'}</span>
+              </button>
+            </div>
+
+            {maintenanceNotice && (
+              <div
+                className={`p-3 rounded-lg border text-xs flex items-center gap-2 ${
+                  maintenanceNotice.type === 'success'
+                    ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+                    : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
+                }`}
+              >
+                {maintenanceNotice.type === 'success' ? (
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                ) : (
+                  <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                )}
+                <span>{maintenanceNotice.text}</span>
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-gray-400 font-medium mb-1">Judul Halaman Maintenance:</label>
+                <input
+                  type="text"
+                  value={maintenanceTitle}
+                  onChange={(e) => setMaintenanceTitle(e.target.value)}
+                  placeholder="Sedang Dalam Pemeliharaan"
+                  className="w-full px-3 py-2 rounded-lg bg-background border border-border text-foreground text-xs focus:outline-none focus:ring-2 focus:ring-amber-500"
+                />
+              </div>
+              <div>
+                <label className="block text-gray-400 font-medium mb-1">Estimasi Selesai (Opsional):</label>
+                <input
+                  type="text"
+                  value={maintenanceEta}
+                  onChange={(e) => setMaintenanceEta(e.target.value)}
+                  placeholder="contoh: Hari ini, 14:00 WIB atau ± 30 menit"
+                  className="w-full px-3 py-2 rounded-lg bg-background border border-border text-foreground text-xs focus:outline-none focus:ring-2 focus:ring-amber-500"
+                />
+              </div>
+              <div className="sm:col-span-2">
+                <label className="block text-gray-400 font-medium mb-1">Pesan Informasi Maintenance:</label>
+                <textarea
+                  rows={3}
+                  value={maintenanceMessage}
+                  onChange={(e) => setMaintenanceMessage(e.target.value)}
+                  placeholder="Kami sedang melakukan pembaruan dan peningkatan sistem untuk memberikan layanan terbaik. Silakan coba kembali beberapa saat lagi."
+                  className="w-full px-3 py-2 rounded-lg bg-background border border-border text-foreground text-xs focus:outline-none focus:ring-2 focus:ring-amber-500 resize-y"
+                />
+              </div>
+            </div>
+
+            <div className="p-3 rounded-lg bg-background border border-border text-[11px] text-gray-400 space-y-1">
+              <div>
+                <strong className="text-foreground">Cakupan Maintenance Otomatis:</strong>
+              </div>
+              <div>
+                &bull; <strong>Domain Ingress (<code>http://{access.domain}</code>)</strong>: Aktif otomatis untuk semua framework lewat Nginx Router (:80) tanpa me-restart container.
+              </div>
+              <div>
+                &bull; <strong>IP:Port Langsung (misal <code>{access.tailscaleIp || access.lanIp}:{access.hostPort || '3101'}</code>)</strong>: Aktif otomatis untuk container <strong>Laravel</strong> lewat <code>storage/framework/down</code>.
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+              <div className="flex items-center gap-2 flex-wrap">
+                <a
+                  href={buildMaintenancePreviewUrl()}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="px-3 py-2 rounded-lg border border-border hover:bg-background text-foreground font-medium flex items-center gap-1.5"
+                >
+                  <Eye className="w-3.5 h-3.5 text-blue-400" />
+                  <span>Preview Halaman</span>
+                  <ExternalLink className="w-3 h-3 opacity-70" />
+                </a>
+                <button
+                  type="button"
+                  onClick={() => setShowMaintenancePreview((v) => !v)}
+                  className="px-3 py-2 rounded-lg border border-border hover:bg-background text-gray-300 font-medium"
+                >
+                  {showMaintenancePreview ? 'Tutup Live Preview' : 'Tampilkan Live Preview'}
+                </button>
+              </div>
+
+              <div className="flex items-center gap-2 flex-wrap">
+                {maintenanceMode ? (
+                  <>
+                    <button
+                      type="button"
+                      disabled={savingMaintenance}
+                      onClick={() => handleToggleMaintenance(true)}
+                      className="px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-500 text-white font-semibold flex items-center gap-1.5 disabled:opacity-50"
+                    >
+                      <Save className="w-3.5 h-3.5" />
+                      <span>{savingMaintenance ? 'Menyimpan...' : 'Simpan Pengaturan Maintenance'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      disabled={savingMaintenance}
+                      onClick={() => handleToggleMaintenance(false)}
+                      className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold flex items-center gap-1.5 disabled:opacity-50"
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      <span>Nonaktifkan &amp; Online-kan</span>
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={savingMaintenance}
+                    onClick={() => handleToggleMaintenance(true)}
+                    className="px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-500 text-white font-semibold flex items-center gap-1.5 disabled:opacity-50"
+                  >
+                    <Wrench className="w-3.5 h-3.5" />
+                    <span>{savingMaintenance ? 'Mengaktifkan...' : 'Aktifkan Mode Maintenance'}</span>
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {showMaintenancePreview && (
+              <div className="rounded-xl border border-border overflow-hidden bg-[#090d16]">
+                <div className="px-3 py-2 border-b border-border flex items-center justify-between text-[11px] font-mono text-gray-400">
+                  <span>Live Preview Halaman Maintenance ({access.domain})</span>
+                  <span>HTTP 503 Preview</span>
+                </div>
+                <iframe
+                  title="Preview Halaman Maintenance"
+                  src={buildMaintenancePreviewUrl()}
+                  className="w-full h-[420px] border-0"
+                />
+              </div>
+            )}
+          </div>
 
           {/* Card 1: Identitas Project & Local Domain */}
           <div className="rounded-xl border border-border bg-card p-5 space-y-4 text-xs">

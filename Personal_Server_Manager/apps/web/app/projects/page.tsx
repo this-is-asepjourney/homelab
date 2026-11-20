@@ -15,6 +15,7 @@ import {
   Database,
   Globe,
   ExternalLink,
+  Wrench,
 } from 'lucide-react';
 import { api } from '../../lib/api';
 import { resolveProjectAccess } from '../../lib/utils';
@@ -139,15 +140,27 @@ export default function ProjectsPage() {
               .replace(/^_|_$/g, '');
             const access = resolveProjectAccess(p, servers);
 
+            const isMaintenance = Boolean(p.maintenance_mode || p.status === 'maintenance');
+
             return (
               <div
                 key={p.id}
-                className="rounded-xl border border-border bg-card p-5 shadow-sm hover:border-blue-500/40 transition-all flex flex-col justify-between"
+                className={`rounded-xl border bg-card p-5 shadow-sm transition-all flex flex-col justify-between ${
+                  isMaintenance
+                    ? 'border-amber-500/40 hover:border-amber-500/60'
+                    : 'border-border hover:border-blue-500/40'
+                }`}
               >
                 <div>
                   <div className="flex items-start justify-between gap-2 mb-3">
                     <div className="flex items-center gap-3">
-                      <div className="p-2.5 rounded-xl border border-blue-500/30 bg-blue-500/10 text-blue-500">
+                      <div
+                        className={`p-2.5 rounded-xl border ${
+                          isMaintenance
+                            ? 'border-amber-500/30 bg-amber-500/10 text-amber-400'
+                            : 'border-blue-500/30 bg-blue-500/10 text-blue-500'
+                        }`}
+                      >
                         <FolderGit2 className="w-5 h-5" />
                       </div>
                       <div>
@@ -162,9 +175,16 @@ export default function ProjectsPage() {
                         </span>
                       </div>
                     </div>
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
-                      {p.status}
-                    </span>
+                    {isMaintenance ? (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-amber-500/15 text-amber-400 border border-amber-500/30">
+                        <Wrench className="w-3 h-3" />
+                        <span>MAINTENANCE</span>
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
+                        {p.status}
+                      </span>
+                    )}
                   </div>
 
                   <div className="space-y-2 text-xs text-gray-400 py-3 border-t border-border">

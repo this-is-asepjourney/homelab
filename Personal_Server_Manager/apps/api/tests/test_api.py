@@ -766,3 +766,80 @@ def test_project_environment_reset_repair_and_clean(client):
     assert clean_map["APP_URL"] == "http://100.78.113.53:3101"
     assert clean_map["DB_CONNECTION"] == "mysql"
     assert clean_map["MYSQL_DATABASE"] == "laravel_reset_db"
+
+
+def test_project_maintenance_mode_and_preview(client):
+    token = get_auth_token(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    server_id = client.get("/api/v1/servers", headers=headers).json()[0]["id"]
+
+    proj_res = client.post(
+        "/api/v1/projects",
+        json={
+            "server_id": server_id,
+            "name": "maint-demo-app",
+            "framework": "Laravel",
+            "source_type": "git",
+            "repository_url": "https://github.com/example/maint-demo-app.git",
+            "port_mappings": "3120:80",
+            "domain": "maint-demo-app.homelab",
+            "db_type": "none",
+            "auto_provision_db": False,
+            "auto_deploy": False,
+        },
+        headers=headers,
+    )
+    assert proj_res.status_code == 200
+    proj = proj_res.json()
+    pid = proj["id"]
+    assert proj["maintenance_mode"] is False
+    assert proj["status"] == "active"
+
+    # 1. Enable maintenance mode with custom title, message, ETA (and XSS payload check)
+    enable_res = client.post(
+        f"/api/v1/projects/{pid}/maintenance",
+        json={
+            "enabled": True,
+            "title": "Sedang Upgrade <script>alert(1)</script>",
+            "message": "Migrasi database sedang berlangsung.",
+            "eta": "14:30 WIB",
+            "retry_after": 90,
+        },
+        headers=headers,
+    )
+    assert enable_res.status_code == 200
+    enable_data = enable_res.json()
+    assert enable_data["maintenance_mode"] is True
+    assert enable_data["project"]["status"] == "maintenance"
+    assert enable_data["project"]["maintenance_mode"] is True
+    assert enable_data["maintenance_eta"] == "14:30 WIB"
+
+    # 2. Verify persistence in GET /projects/{id}
+    get_res = client.get(f"/api/v1/projects/{pid}", headers=headers)
+    assert get_res.status_code == 200
+    get_data = get_res.json()
+    assert get_data["maintenance_mode"] is True
+    assert get_data["status"] == "maintenance"
+    assert get_data["maintenance_message"] == "Migrasi database sedang berlangsung."
+
+    # 3. Check public HTML preview renders custom text & escapes HTML/XSS
+    prev_res = client.get(f"/api/v1/projects/{pid}/maintenance/preview")
+    assert prev_res.status_code == 200
+    assert "text/html" in prev_res.headers.get("content-type", "")
+    html_body = prev_res.text
+    assert "UNDER MAINTENANCE" in html_body
+    assert "Migrasi database sedang berlangsung." in html_body
+    assert "14:30 WIB" in html_body
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html_body
+    assert "<script>alert(1)</script>" not in html_body
+
+    # 4. Disable maintenance mode restores status to active
+    disable_res = client.post(
+        f"/api/v1/projects/{pid}/maintenance",
+        json={"enabled": False},
+        headers=headers,
+    )
+    assert disable_res.status_code == 200
+    disable_data = disable_res.json()
+    assert disable_data["maintenance_mode"] is False
+    assert disable_data["project"]["status"] == "active"

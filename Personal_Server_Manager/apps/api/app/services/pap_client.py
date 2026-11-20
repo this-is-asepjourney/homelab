@@ -261,8 +261,17 @@ def resolve_effective_domain(domain: Optional[str], project_name: str) -> str:
     return raw
 
 
-def sync_domain_routing(domain: str, target_port: int, project_name: Optional[str] = None) -> bool:
-    """Register or update domain route with PAP DNS & Ingress Router."""
+def sync_domain_routing(
+    domain: str,
+    target_port: int,
+    project_name: Optional[str] = None,
+    maintenance_mode: bool = False,
+    maintenance_title: Optional[str] = None,
+    maintenance_message: Optional[str] = None,
+    maintenance_eta: Optional[str] = None,
+    retry_after: int = 60,
+) -> bool:
+    """Register or update domain route (or HTTP 503 maintenance page) with PAP DNS & Ingress Router."""
     if not domain:
         return False
     # 1. Try PAP API via HTTP
@@ -271,6 +280,11 @@ def sync_domain_routing(domain: str, target_port: int, project_name: Optional[st
         "target_port": target_port,
         "target_host": "host.docker.internal",
         "project_name": project_name,
+        "maintenance_mode": bool(maintenance_mode),
+        "maintenance_title": maintenance_title,
+        "maintenance_message": maintenance_message,
+        "maintenance_eta": maintenance_eta,
+        "retry_after": int(retry_after or 60),
     }
     resp = request_pap("POST", "/api/v1/dns/records", json_body=payload, timeout=2.0)
     if resp is not None and resp.status_code in (200, 201):
@@ -279,7 +293,16 @@ def sync_domain_routing(domain: str, target_port: int, project_name: Optional[st
     # 2. Direct Service Fallback (if mounted/shared)
     try:
         from app.modules.dns.service import DnsService
-        DnsService.register_domain_route(domain=domain, target_port=target_port, project_name=project_name)
+        DnsService.register_domain_route(
+            domain=domain,
+            target_port=target_port,
+            project_name=project_name,
+            maintenance_mode=bool(maintenance_mode),
+            maintenance_title=maintenance_title,
+            maintenance_message=maintenance_message,
+            maintenance_eta=maintenance_eta,
+            retry_after=int(retry_after or 60),
+        )
         return True
     except Exception:
         pass
@@ -313,7 +336,16 @@ def sync_all_project_domains(db: Session) -> Dict[str, Any]:
     for p in projects:
         eff_domain = resolve_effective_domain(p.domain, p.name)
         hp = extract_host_port(p.port_mappings)
-        ok = sync_domain_routing(domain=eff_domain, target_port=hp, project_name=p.name)
+        is_maint = bool(getattr(p, "maintenance_mode", False) or p.status == "maintenance")
+        ok = sync_domain_routing(
+            domain=eff_domain,
+            target_port=hp,
+            project_name=p.name,
+            maintenance_mode=is_maint,
+            maintenance_title=getattr(p, "maintenance_title", None),
+            maintenance_message=getattr(p, "maintenance_message", None),
+            maintenance_eta=getattr(p, "maintenance_eta", None),
+        )
         if ok:
             synced += 1
         else:
@@ -323,6 +355,7 @@ def sync_all_project_domains(db: Session) -> Dict[str, Any]:
             "project_name": p.name,
             "domain": eff_domain,
             "target_port": hp,
+            "maintenance_mode": is_maint,
             "synced": ok,
         })
 

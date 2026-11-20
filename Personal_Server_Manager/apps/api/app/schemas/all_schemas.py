@@ -260,6 +260,17 @@ class ProjectUpdate(BaseModel):
     db_type: Optional[str] = None
     db_name: Optional[str] = None
     redeploy: Optional[bool] = False
+    maintenance_mode: Optional[bool] = None
+    maintenance_title: Optional[str] = None
+    maintenance_message: Optional[str] = None
+    maintenance_eta: Optional[str] = None
+
+class ProjectMaintenanceRequest(BaseModel):
+    enabled: bool
+    title: Optional[str] = None
+    message: Optional[str] = None
+    eta: Optional[str] = None
+    retry_after: int = 60
 
 class ProjectResponse(BaseModel):
     id: str
@@ -279,6 +290,10 @@ class ProjectResponse(BaseModel):
     domain: Optional[str] = None
     db_type: Optional[str] = "none"
     db_name: Optional[str] = None
+    maintenance_mode: bool = False
+    maintenance_title: Optional[str] = None
+    maintenance_message: Optional[str] = None
+    maintenance_eta: Optional[str] = None
     server_ip: Optional[str] = None
     server_tailscale_ip: Optional[str] = None
     access_urls: Optional[Dict[str, Optional[str]]] = None

@@ -14,6 +14,11 @@ class RegisterDomainRequest(BaseModel):
     target_port: int = Field(..., description="Target port of the container, e.g. 3000")
     target_host: Optional[str] = Field(default="host.docker.internal", description="Target host IP or hostname")
     project_name: Optional[str] = Field(default=None, description="Optional project identifier")
+    maintenance_mode: bool = Field(default=False, description="Serve HTTP 503 maintenance page instead of proxying upstream")
+    maintenance_title: Optional[str] = Field(default=None, description="Custom maintenance page title")
+    maintenance_message: Optional[str] = Field(default=None, description="Custom maintenance page message")
+    maintenance_eta: Optional[str] = Field(default=None, description="Optional estimated completion time")
+    retry_after: int = Field(default=60, ge=5, le=86400, description="Retry-After header value in seconds")
 
 
 @router.get("/status")
@@ -42,6 +47,11 @@ def register_domain(payload: RegisterDomainRequest):
             target_port=payload.target_port,
             target_host=payload.target_host or "host.docker.internal",
             project_name=payload.project_name,
+            maintenance_mode=payload.maintenance_mode,
+            maintenance_title=payload.maintenance_title,
+            maintenance_message=payload.maintenance_message,
+            maintenance_eta=payload.maintenance_eta,
+            retry_after=payload.retry_after,
         )
         return {"success": True, "message": f"Domain {payload.domain} registered successfully", "data": res}
     except Exception as e:

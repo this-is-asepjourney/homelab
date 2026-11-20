@@ -111,6 +111,10 @@ class Project(Base):
     domain = Column(String(255), nullable=True, index=True)
     db_type = Column(String(50), default="none", nullable=True)  # postgres, mysql, sqlite, none, custom
     db_name = Column(String(100), nullable=True)
+    maintenance_mode = Column(Boolean, default=False, nullable=False)
+    maintenance_title = Column(String(255), nullable=True)
+    maintenance_message = Column(Text, nullable=True)
+    maintenance_eta = Column(String(120), nullable=True)
     created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
 
     server = relationship("Server", back_populates="projects")
