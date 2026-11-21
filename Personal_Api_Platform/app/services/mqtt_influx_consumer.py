@@ -261,6 +261,7 @@ class MqttPgConsumer:
                 mac=data.get("mac") or data.get("MAC"),
                 ssid=data.get("ap") or data.get("ssid"),
                 firmware=data.get("VER"),
+                air_quality=data.get("air_quality"),
             )
 
             # Update live Prometheus metrics for Prometheus dashboards
@@ -355,6 +356,7 @@ class MqttPgConsumer:
         mac=None,
         ssid=None,
         firmware=None,
+        air_quality=None,
     ):
         """Keep PostgreSQL `eternal_iot` snapshot & logs in sync with incoming MQTT telemetry."""
         conn = None
@@ -384,6 +386,8 @@ class MqttPgConsumer:
                     cols["ssid"] = str(ssid)
                 if firmware:
                     cols["firmware_version"] = str(firmware)
+                if air_quality:
+                    cols["air_quality"] = str(air_quality)
 
                 names = ["device_serial", "model", "status", "last_seen_at", "updated_at"] + list(cols.keys())
                 placeholders = ["%s", "%s", "'online'", "NOW()", "NOW()"] + ["%s"] * len(cols)
@@ -398,7 +402,7 @@ class MqttPgConsumer:
                 cur.execute(sql_device, [device_serial, model] + list(cols.values()))
 
                 # 2. Append time-series point to iot_telemetry_logs
-                if temp is not None or hum is not None or is_locked is not None:
+                if temp is not None and hum is not None:
                     cur.execute("""
                         INSERT INTO iot_telemetry_logs
                             (device_serial, temperature_c, humidity_pct, heat_index_c, wifi_rssi,
