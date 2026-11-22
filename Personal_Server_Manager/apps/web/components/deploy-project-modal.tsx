@@ -45,21 +45,21 @@ const RESERVED_SYSTEM_PORTS: Record<number, string> = {
   53: 'CoreDNS (:53)',
   80: 'Nginx Ingress Router (:80)',
   1883: 'Mosquitto MQTT (:1883)',
-  3000: 'PSM Web Internal (:3000)',
-  3001: 'Grafana Utama (:3001)',
-  3002: 'Uptime Kuma (:3002)',
+  3000: 'Grafana (:3000)',
+  3001: 'Uptime Kuma (:3001)',
   3005: 'PSM Console Web (:3005)',
-  3306: 'MySQL Server (:3306)',
-  5001: 'Homelab Registry (:5001)',
-  5432: 'PostgreSQL Server (:5432)',
-  8000: 'PAP Core Central API Gateway (:8000)',
-  8001: 'PAP Core Web UI (:8001)',
-  8080: 'Vaultwarden Password Manager (:8080)',
-  8081: 'Apache Web Server (:8081)',
-  8086: 'InfluxDB TSDB (:8086)',
-  8088: 'HeatpressHub Web (:8088)',
-  9001: 'Prometheus Server (:9001)',
-  9090: 'Cockpit Admin Console (:9090)',
+  3306: 'MySQL 8.4 (:3306)',
+  5432: 'PostgreSQL 16 (:5432)',
+  6379: 'Redis 7 (:6379)',
+  8000: 'PAP Core API Gateway (:8000)',
+  8001: 'PSM Control Plane API (:8001)',
+  8080: 'Nextcloud (:8080)',
+  8081: 'cAdvisor (:8081)',
+  9000: 'MinIO S3 API (:9000)',
+  9002: 'MinIO Web Console (:9002)',
+  9090: 'Prometheus (:9090)',
+  9100: 'Node Exporter (:9100)',
+  9273: 'Telegraf Exporter (:9273)',
 };
 
 export function DeployProjectModal({
@@ -204,24 +204,25 @@ export function DeployProjectModal({
     }
   };
 
-  // Auto-discover next available free port on target server
+  // Auto-discover next available free port on target server whenever modal opens
   useEffect(() => {
+    if (!isOpen) return;
     let mounted = true;
     api.getNextAvailablePort().then((res) => {
       if (mounted && res && res.recommended_host_port) {
         setRecommendedPort(res.recommended_host_port);
         if (res.reserved_ports) {
-          setReservedPorts({ ...RESERVED_SYSTEM_PORTS, ...res.reserved_ports });
+          setReservedPorts({ ...res.reserved_ports, ...RESERVED_SYSTEM_PORTS });
         }
         if (!existingProject && (hostPort === '3000' || hostPort === '3100')) {
           setHostPort(String(res.recommended_host_port));
         }
       }
-    });
+    }).catch(() => {});
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [isOpen]);
 
   // Initialize from existing project if supplied
   useEffect(() => {
@@ -309,13 +310,20 @@ export function DeployProjectModal({
   // Realtime port conflict detection
   const currentHpNum = parseInt(hostPort.trim(), 10);
   const rawPortConflict = !isNaN(currentHpNum) ? reservedPorts[currentHpNum] : null;
-  // If editing an existing project, using its own active port is completely valid and NOT a conflict!
+  const isCoreSystemPort = !isNaN(currentHpNum) && Boolean(RESERVED_SYSTEM_PORTS[currentHpNum]);
+  const existingHostPorts = (existingProject?.port_mappings || '')
+    .split(',')
+    .map((entry: string) => entry.trim().split(':')[0].trim())
+    .filter(Boolean);
+  // If editing an existing project, using its own non-core active port is valid;
+  // core homelab ports (e.g. 3000 = Grafana) are NEVER exempt!
   const isSelfProjectPort = Boolean(
     existingProject &&
     rawPortConflict &&
+    !isCoreSystemPort &&
     (
       rawPortConflict.toLowerCase().includes((existingProject.name || '').toLowerCase()) ||
-      (existingProject.port_mappings && existingProject.port_mappings.includes(String(currentHpNum)))
+      existingHostPorts.includes(String(currentHpNum))
     )
   );
   const portConflictReason = isSelfProjectPort ? null : rawPortConflict;
@@ -1038,7 +1046,7 @@ export function DeployProjectModal({
                   <div>
                     <span className="text-gray-500 text-[10px] block">Akses Luar / Browser</span>
                     <span className="font-bold text-foreground">
-                      http://{serverHost}:{hostPort || '3000'}
+                      http://{serverHost}:{hostPort || String(recommendedPort)}
                     </span>
                   </div>
                 </div>

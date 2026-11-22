@@ -227,7 +227,7 @@ class ProjectCreate(BaseModel):
     database_name: Optional[str] = None
     db_type: Optional[str] = "postgres"  # postgres, mysql, sqlite, none, custom
     domain: Optional[str] = None  # e.g. pos-kasir.homelab
-    port_mappings: Optional[str] = "3000:3000"
+    port_mappings: Optional[str] = None
     environment_variables: Optional[List[EnvironmentVariableItem]] = None
     auto_deploy: bool = True
 
@@ -286,7 +286,7 @@ class ProjectResponse(BaseModel):
     branch: Optional[str] = None
     dockerfile_path: Optional[str] = None
     compose_path: Optional[str] = None
-    port_mappings: Optional[str] = "3000:3000"
+    port_mappings: Optional[str] = None
     domain: Optional[str] = None
     db_type: Optional[str] = "none"
     db_name: Optional[str] = None

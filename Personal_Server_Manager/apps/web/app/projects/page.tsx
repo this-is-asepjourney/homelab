@@ -252,7 +252,7 @@ export default function ProjectsPage() {
 
                     {/* Port Mappings Display */}
                     <div className="flex items-center gap-1.5 font-mono text-gray-400 text-[11px]">
-                      <span>Docker Port: {p.port_mappings || '3000:3000'}</span>
+                      <span>Docker Port: {p.port_mappings || '—'}</span>
                     </div>
 
                     {/* Source */}

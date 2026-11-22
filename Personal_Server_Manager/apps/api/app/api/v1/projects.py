@@ -62,6 +62,10 @@ from apps.api.app.services.db_provision_service import (
     list_all_postgres_databases,
     list_all_mysql_databases,
 )
+from apps.api.app.services.port_service import (
+    find_next_available_port,
+    validate_or_allocate_port_mappings,
+)
 
 router = APIRouter(prefix="/projects", tags=["Project Management"])
 
@@ -176,7 +180,7 @@ def _build_connected_project_entry(
         "framework": p.framework,
         "status": p.status,
         "domain": resolve_effective_domain(p.domain, p.name),
-        "port_mappings": p.port_mappings or "3000:3000",
+        "port_mappings": p.port_mappings or "",
         "container_exists": bool(runtime.get("container_exists", False)),
         "container_name": runtime.get("container_name") or p.name,
         "container_running": bool(runtime.get("container_running", False)),
@@ -202,8 +206,8 @@ def _resolve_server_ips(server: Optional[Server]) -> Tuple[str, Optional[str]]:
 def _build_project_response(p: Project, deployment_id: Optional[str] = None) -> ProjectResponse:
     src = p.source
     lan_ip, ts_ip = _resolve_server_ips(p.server)
-    port_mappings = p.port_mappings or "3000:3000"
-    host_port = extract_host_port(port_mappings)
+    port_mappings = p.port_mappings or ""
+    host_port = extract_host_port(port_mappings) if port_mappings else None
     effective_domain = resolve_effective_domain(p.domain, p.name)
     access_urls: Dict[str, Optional[str]] = {
         "domain": f"http://{effective_domain}",
@@ -224,7 +228,7 @@ def _build_project_response(p: Project, deployment_id: Optional[str] = None) -> 
         branch=src.branch if src else None,
         dockerfile_path=src.dockerfile_path if src else None,
         compose_path=src.compose_path if src else None,
-        port_mappings=port_mappings,
+        port_mappings=port_mappings or None,
         domain=effective_domain,
         db_type=p.db_type or "none",
         db_name=p.db_name,
@@ -288,58 +292,7 @@ def get_next_available_port(
     db: Session = Depends(get_db)
 ):
     """Detects active and reserved ports in the homelab and returns a safe, unallocated host port."""
-    import socket
-
-    # Homelab core system reserved ports matching docker-compose.yml
-    reserved_ports = {
-        53: "CoreDNS (:53)",
-        80: "Nginx Ingress Router (:80)",
-        1883: "Mosquitto MQTT (:1883)",
-        3000: "Grafana (:3000)",
-        3001: "Uptime Kuma (:3001)",
-        3005: "PSM Console Web (:3005)",
-        3306: "MySQL 8.4 (:3306)",
-        5432: "PostgreSQL 16 (:5432)",
-        6379: "Redis 7 (:6379)",
-        8000: "PAP Core API Gateway (:8000)",
-        8001: "PSM Control Plane API (:8001)",
-        8080: "Nextcloud (:8080)",
-        8081: "cAdvisor (:8081)",
-        9000: "MinIO S3 API (:9000)",
-        9002: "MinIO Web Console (:9002)",
-        9090: "Prometheus (:9090)",
-        9100: "Node Exporter (:9100)",
-    }
-
-    # Query all ports currently mapped in projects database
-    projects = db.query(Project).all()
-    for p in projects:
-        if p.port_mappings:
-            for entry in p.port_mappings.split(","):
-                if ":" in entry:
-                    try:
-                        hp = int(entry.split(":")[0].strip())
-                        reserved_ports[hp] = f"Project: {p.name} (Port {hp})"
-                    except Exception:
-                        pass
-
-    # Find the next free port starting from 3100
-    candidate = 3100
-    while candidate < 65535:
-        if candidate not in reserved_ports:
-            # Also test socket bind to ensure nothing outside docker is using it
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(0.08)
-            try:
-                result = sock.connect_ex(("127.0.0.1", candidate))
-                if result != 0:  # Not listening, port is free
-                    break
-            except Exception:
-                break
-            finally:
-                sock.close()
-        candidate += 1
-
+    candidate, reserved_ports = find_next_available_port(db)
     return {
         "success": True,
         "recommended_host_port": candidate,
@@ -475,6 +428,12 @@ async def create_project(
 
     project_domain = resolve_effective_domain(payload.domain, payload.name)
     project_db_type = getattr(payload, "db_type", "postgres") or "none"
+    resolved_ports, _ = validate_or_allocate_port_mappings(
+        db,
+        payload.port_mappings,
+        framework=payload.framework,
+        auto_fix_reserved=False,
+    )
 
     project = Project(
         server_id=payload.server_id,
@@ -483,7 +442,7 @@ async def create_project(
         description=payload.description,
         framework=payload.framework,
         source_type=payload.source_type,
-        port_mappings=payload.port_mappings or "3000:3000",
+        port_mappings=resolved_ports,
         domain=project_domain,
         db_type=project_db_type,
         db_name=getattr(payload, "database_name", None),
@@ -536,12 +495,7 @@ async def create_project(
     if project.domain:
         try:
             from apps.api.app.services.pap_client import sync_domain_routing
-            hp = 3000
-            if project.port_mappings and ":" in project.port_mappings:
-                try:
-                    hp = int(project.port_mappings.split(":")[0].strip())
-                except Exception:
-                    hp = 3000
+            hp = extract_host_port(project.port_mappings)
             sync_domain_routing(domain=project.domain, target_port=hp, project_name=project.name)
         except Exception:
             pass
@@ -595,7 +549,7 @@ async def create_project(
                 "commit_hash": None,
                 "dockerfile_path": source.dockerfile_path or "Dockerfile",
                 "compose_path": source.compose_path or "docker-compose.yml",
-                "port_mappings": project.port_mappings or "3000:3000",
+                "port_mappings": project.port_mappings,
                 "image_tag": image_tag,
                 "version": version,
                 "db_type": project.db_type,
@@ -691,6 +645,28 @@ async def execute_project_redeploy(
     db.add(initial_log)
     db.commit()
 
+    safe_ports, port_notice = validate_or_allocate_port_mappings(
+        db,
+        project.port_mappings,
+        framework=project.framework,
+        exclude_project_id=project.id,
+        exclude_container_name=project.name,
+        auto_fix_reserved=True,
+    )
+    if safe_ports != project.port_mappings:
+        project.port_mappings = safe_ports
+        db.commit()
+    if port_notice:
+        db.add(
+            DeploymentLog(
+                deployment_id=deployment.id,
+                sequence=2,
+                level="warning",
+                message=f"[Port-Guard] {port_notice}",
+            )
+        )
+        db.commit()
+
     # Auto-provision DB if missing while preserving user-edited environment variables
     db_info, env_vars = provision_and_sync_project_db(
         db, project, custom_db_name=project.db_name, db_type=project.db_type, override_existing_env=False
@@ -718,7 +694,7 @@ async def execute_project_redeploy(
             "commit_hash": None,
             "dockerfile_path": src.dockerfile_path or "Dockerfile",
             "compose_path": src.compose_path or "docker-compose.yml",
-            "port_mappings": project.port_mappings or "3000:3000",
+            "port_mappings": project.port_mappings,
             "image_tag": image_tag,
             "version": version,
             "db_type": project.db_type,
@@ -738,7 +714,7 @@ async def execute_project_redeploy(
             "version": version,
             "dockerfile_path": src.dockerfile_path or "Dockerfile",
             "compose_path": src.compose_path or "docker-compose.yml",
-            "port_mappings": project.port_mappings or "3000:3000",
+            "port_mappings": project.port_mappings,
             "db_type": project.db_type,
             "environment_variables": full_env,
             "database_config": db_info,
@@ -820,7 +796,15 @@ async def update_project(
     if payload.framework is not None:
         p.framework = payload.framework
     if payload.port_mappings is not None:
-        p.port_mappings = payload.port_mappings
+        resolved_ports, _ = validate_or_allocate_port_mappings(
+            db,
+            payload.port_mappings,
+            framework=payload.framework or p.framework,
+            exclude_project_id=p.id,
+            exclude_container_name=p.name,
+            auto_fix_reserved=False,
+        )
+        p.port_mappings = resolved_ports
     if payload.domain is not None:
         p.domain = resolve_effective_domain(payload.domain, p.name) if payload.domain.strip() else None
     if payload.db_type is not None:

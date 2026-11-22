@@ -107,7 +107,7 @@ class Project(Base):
     framework = Column(String(50), default="Node.js / Docker", nullable=False)
     source_type = Column(String(20), default="git", nullable=False)  # git, upload
     status = Column(String(30), default="active", nullable=False)  # active, stopped, failed
-    port_mappings = Column(String(255), default="3000:3000", nullable=True)
+    port_mappings = Column(String(255), default=None, nullable=True)
     domain = Column(String(255), nullable=True, index=True)
     db_type = Column(String(50), default="none", nullable=True)  # postgres, mysql, sqlite, none, custom
     db_name = Column(String(100), nullable=True)

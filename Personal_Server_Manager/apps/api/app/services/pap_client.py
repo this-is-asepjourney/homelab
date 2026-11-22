@@ -241,7 +241,7 @@ def extract_host_port(port_mappings: Optional[str]) -> int:
                 pass
         elif first_mapping.isdigit():
             return int(first_mapping)
-    return 3000
+    return 3100
 
 
 def resolve_effective_domain(domain: Optional[str], project_name: str) -> str:

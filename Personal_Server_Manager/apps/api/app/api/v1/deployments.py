@@ -35,6 +35,7 @@ from apps.api.app.services.pap_client import (
     resolve_effective_domain,
     sync_domain_routing,
 )
+from apps.api.app.services.port_service import validate_or_allocate_port_mappings
 
 router = APIRouter(prefix="/deployments", tags=["Deployment Center"])
 
@@ -87,8 +88,28 @@ async def create_git_deployment(
 
     # Update port_mappings, domain, db_type, and env vars if provided in deploy payload
     old_db_type = (project.db_type or "").strip().lower()
-    if payload.port_mappings:
-        project.port_mappings = payload.port_mappings.strip()
+    port_notice: Optional[str] = None
+    if payload.port_mappings and payload.port_mappings.strip():
+        resolved_ports, _ = validate_or_allocate_port_mappings(
+            db,
+            payload.port_mappings,
+            framework=project.framework,
+            exclude_project_id=project.id,
+            exclude_container_name=project.name,
+            auto_fix_reserved=False,
+        )
+        project.port_mappings = resolved_ports
+    else:
+        resolved_ports, port_notice = validate_or_allocate_port_mappings(
+            db,
+            project.port_mappings,
+            framework=project.framework,
+            exclude_project_id=project.id,
+            exclude_container_name=project.name,
+            auto_fix_reserved=True,
+        )
+        if resolved_ports != project.port_mappings:
+            project.port_mappings = resolved_ports
 
     if payload.domain and payload.domain.strip():
         project.domain = resolve_effective_domain(payload.domain, project.name)
@@ -154,10 +175,21 @@ async def create_git_deployment(
         if db_info.get("created")
         else f"[{db_type_label}] Auto-connected project to database '{db_info.get('db_name')}' ({db_info.get('host')}:{db_info.get('port')})."
     )
+    seq_no = 2
+    if port_notice:
+        db.add(
+            DeploymentLog(
+                deployment_id=deployment.id,
+                sequence=seq_no,
+                level="warning",
+                message=f"[Port-Guard] {port_notice}",
+            )
+        )
+        seq_no += 1
     db.add(
         DeploymentLog(
             deployment_id=deployment.id,
-            sequence=2,
+            sequence=seq_no,
             level="info",
             message=db_log_msg,
         )
@@ -182,7 +214,7 @@ async def create_git_deployment(
         "commit_hash": payload.commit_hash,
         "dockerfile_path": src.dockerfile_path or "Dockerfile",
         "compose_path": src.compose_path or "docker-compose.yml",
-        "port_mappings": project.port_mappings or "3000:3000",
+        "port_mappings": project.port_mappings,
         "image_tag": image_tag,
         "version": version,
         "db_type": project.db_type,
@@ -264,8 +296,28 @@ async def finalize_zip_upload(
 
     # Update port mappings and db_type if provided with upload
     old_db_type = (project.db_type or "").strip().lower()
-    if port_mappings:
-        project.port_mappings = port_mappings.strip()
+    port_notice: Optional[str] = None
+    if port_mappings and port_mappings.strip():
+        resolved_ports, _ = validate_or_allocate_port_mappings(
+            db,
+            port_mappings,
+            framework=project.framework,
+            exclude_project_id=project.id,
+            exclude_container_name=project.name,
+            auto_fix_reserved=False,
+        )
+        project.port_mappings = resolved_ports
+    else:
+        resolved_ports, port_notice = validate_or_allocate_port_mappings(
+            db,
+            project.port_mappings,
+            framework=project.framework,
+            exclude_project_id=project.id,
+            exclude_container_name=project.name,
+            auto_fix_reserved=True,
+        )
+        if resolved_ports != project.port_mappings:
+            project.port_mappings = resolved_ports
 
     db_type_changed = False
     if db_type:
@@ -357,6 +409,15 @@ async def finalize_zip_upload(
         message=f"Deployment v{version} triggered via ZIP upload ({file.filename})"
     )
     db.add(initial_log)
+    if port_notice:
+        db.add(
+            DeploymentLog(
+                deployment_id=deployment.id,
+                sequence=2,
+                level="warning",
+                message=f"[Port-Guard] {port_notice}",
+            )
+        )
     db.commit()
 
     # Auto-provision & auto-connect database for ZIP deployment (preserve user-edited env unless db_type changed)
@@ -381,7 +442,7 @@ async def finalize_zip_upload(
         "version": version,
         "dockerfile_path": project.source.dockerfile_path if project.source else "Dockerfile",
         "compose_path": project.source.compose_path if project.source else "docker-compose.yml",
-        "port_mappings": project.port_mappings or "3000:3000",
+        "port_mappings": project.port_mappings,
         "db_type": project.db_type,
         "environment_variables": env_vars,
         "database_config": db_info,
@@ -479,10 +540,37 @@ async def github_webhook_trigger(
         message=f"[Webhook] Auto-deploy v{version} triggered by GitHub push on '{pushed_branch}' ({commit_hash[:7]})"
     )
     db.add(initial_log)
+
+    safe_ports, port_notice = validate_or_allocate_port_mappings(
+        db,
+        project.port_mappings,
+        framework=project.framework,
+        exclude_project_id=project.id,
+        exclude_container_name=project.name,
+        auto_fix_reserved=True,
+    )
+    if safe_ports != project.port_mappings:
+        project.port_mappings = safe_ports
+    if port_notice:
+        db.add(
+            DeploymentLog(
+                deployment_id=deployment.id,
+                sequence=2,
+                level="warning",
+                message=f"[Port-Guard] {port_notice}",
+            )
+        )
     db.commit()
 
     # Auto-provision & auto-connect PostgreSQL database for webhook deployment
     db_info, env_vars = provision_and_sync_project_db(db, project)
+
+    try:
+        eff_domain = resolve_effective_domain(project.domain, project.name)
+        hp = extract_host_port(project.port_mappings)
+        sync_domain_routing(domain=eff_domain, target_port=hp, project_name=project.name)
+    except Exception:
+        pass
 
     job_payload = {
         "deployment_id": deployment.id,
@@ -494,7 +582,7 @@ async def github_webhook_trigger(
         "commit_hash": commit_hash,
         "dockerfile_path": src.dockerfile_path or "Dockerfile",
         "compose_path": src.compose_path or "docker-compose.yml",
-        "port_mappings": project.port_mappings or "3000:3000",
+        "port_mappings": project.port_mappings,
         "image_tag": image_tag,
         "version": version,
         "db_type": project.db_type,

@@ -183,5 +183,83 @@ def test_auto_wire_silo_storage_defaults_and_overrides(monkeypatch):
     assert merged_custom["AWS_ENDPOINT"] == "http://minio:9000"
 
 
+def test_ensure_project_db_mysql_prisma_normalizes_database_url(tmp_path):
+    # Case 1: Prisma / Node.js workspace with pre-injected SQLAlchemy mysql+pymysql:// URL
+    prisma_dir = tmp_path / "prisma_app"
+    (prisma_dir / "prisma").mkdir(parents=True)
+    logs = []
+    merged_prisma = DeploymentEngine.ensure_project_db(
+        project_name="financial-app",
+        env_vars={"DATABASE_URL": "mysql+pymysql://fadb:wokeh123@mysql:3306/financial_app"},
+        db_config={"db_type": "mysql", "db_name": "financial_app", "user": "fadb", "password": "wokeh123", "host": "mysql", "port": 3306},
+        workspace_dir=str(prisma_dir),
+        log_callback=lambda lvl, msg: logs.append((lvl, msg)),
+    )
+    assert merged_prisma["DATABASE_URL"].startswith("mysql://")
+    assert "mysql+pymysql://" not in merged_prisma["DATABASE_URL"]
+    assert merged_prisma["SQLALCHEMY_DATABASE_URI"].startswith("mysql+pymysql://")
+
+    # Case 2: Python / SQLAlchemy workspace (no prisma/ or package.json) keeps mysql+pymysql://
+    py_dir = tmp_path / "python_app"
+    py_dir.mkdir(parents=True)
+    merged_py = DeploymentEngine.ensure_project_db(
+        project_name="python-api",
+        env_vars={},
+        db_config={"db_type": "mysql", "db_name": "python_api", "user": "fadb", "password": "wokeh123", "host": "mysql", "port": 3306},
+        workspace_dir=str(py_dir),
+        log_callback=lambda lvl, msg: logs.append((lvl, msg)),
+    )
+    assert merged_py["DATABASE_URL"].startswith("mysql+pymysql://")
+
+
+def test_parse_port_mappings_avoids_reserved_grafana_3000(tmp_path):
+    df_path = tmp_path / "Dockerfile"
+    df_path.write_text("FROM node:20-alpine\nEXPOSE 3000\n")
+
+    # 1. Explicit 3000:3000 must remap host port away from 3000 (>= 3100) while keeping container 3000
+    logs = []
+    cli_args, sdk_ports, primary_cp = DeploymentEngine.parse_port_mappings(
+        explicit_mappings="3000:3000",
+        full_df_path=str(df_path),
+        workspace_dir=str(tmp_path),
+        log_callback=lambda lvl, msg: logs.append((lvl, msg)),
+        avoid_reserved_host_ports=True,
+    )
+    assert primary_cp == 3000
+    mapped_hp = sdk_ports["3000/tcp"]
+    assert mapped_hp >= 3100 and mapped_hp != 3000
+    assert f"{mapped_hp}:3000" in cli_args
+    assert any("Grafana" in msg for _, msg in logs)
+
+    # 2. Fallback from .env PORT=3000 with avoid_reserved_host_ports=True must also remap host port
+    (tmp_path / ".env").write_text("PORT=3000\n")
+    logs_env = []
+    cli_env, sdk_env, primary_env_cp = DeploymentEngine.parse_port_mappings(
+        explicit_mappings=None,
+        full_df_path=str(df_path),
+        workspace_dir=str(tmp_path),
+        log_callback=lambda lvl, msg: logs_env.append((lvl, msg)),
+        avoid_reserved_host_ports=True,
+    )
+    assert primary_env_cp == 3000
+    assert sdk_env["3000/tcp"] >= 3100
+    assert f"{sdk_env['3000/tcp']}:3000" in cli_env
+
+    # 3. Safe non-conflicting port 3105:3000 must be kept unchanged
+    logs_safe = []
+    cli_safe, sdk_safe, primary_safe_cp = DeploymentEngine.parse_port_mappings(
+        explicit_mappings="3105:3000",
+        full_df_path=str(df_path),
+        workspace_dir=str(tmp_path),
+        log_callback=lambda lvl, msg: logs_safe.append((lvl, msg)),
+        avoid_reserved_host_ports=True,
+    )
+    assert primary_safe_cp == 3000
+    assert sdk_safe == {"3000/tcp": 3105}
+    assert "-p" in cli_safe and "3105:3000" in cli_safe
+
+
+
+
 
 

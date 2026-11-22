@@ -388,7 +388,7 @@ export default function DeploymentDetailPage() {
       allLogText.includes('address already in use') ||
       allLogText.includes('Port bentrok')
     ) {
-      const ports = deployment?.port_mappings || project?.port_mappings || '3000:3000';
+      const ports = deployment?.port_mappings || project?.port_mappings || '—';
       return {
         title: 'Port Host Bentrok (Port Already in Use)',
         reason: `Port host (${ports}) sedang digunakan oleh container atau service lain di server Ubuntu.`,

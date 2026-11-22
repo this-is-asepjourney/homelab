@@ -2,6 +2,7 @@ import os
 import re
 import shlex
 import shutil
+import socket
 import subprocess
 import time
 import zipfile
@@ -12,6 +13,27 @@ from apps.agent.app.deployment.dockerfile_generator import (
     detect_project_stack,
     generate_dockerfile,
 )
+
+CORE_RESERVED_HOST_PORTS: Dict[int, str] = {
+    53: "CoreDNS (:53)",
+    80: "Nginx Ingress Router (:80)",
+    1883: "Mosquitto MQTT (:1883)",
+    3000: "Grafana (:3000)",
+    3001: "Uptime Kuma (:3001)",
+    3005: "PSM Console Web (:3005)",
+    3306: "MySQL 8.4 (:3306)",
+    5432: "PostgreSQL 16 (:5432)",
+    6379: "Redis 7 (:6379)",
+    8000: "PAP Core API Gateway (:8000)",
+    8001: "PSM Control Plane API (:8001)",
+    8080: "Nextcloud (:8080)",
+    8081: "cAdvisor (:8081)",
+    9000: "MinIO S3 API (:9000)",
+    9002: "MinIO Web Console (:9002)",
+    9090: "Prometheus (:9090)",
+    9100: "Node Exporter (:9100)",
+    9273: "Telegraf Exporter (:9273)",
+}
 
 
 def should_log_build_line(line: str) -> bool:
@@ -303,9 +325,16 @@ class DeploymentEngine:
 
             conn_url = f"mysql+pymysql://{my_user}:{my_pass}@{my_host}:{my_port}/{target_db}"
             std_url = f"mysql://{my_user}:{my_pass}@{my_host}:{my_port}/{target_db}"
+            is_node_or_prisma = bool(
+                workspace_dir
+                and (
+                    os.path.exists(os.path.join(workspace_dir, "prisma"))
+                    or os.path.exists(os.path.join(workspace_dir, "package.json"))
+                )
+            )
 
             my_vars = {
-                "DATABASE_URL": conn_url,
+                "DATABASE_URL": std_url if is_node_or_prisma else conn_url,
                 "MYSQL_URL": std_url,
                 "SQLALCHEMY_DATABASE_URI": conn_url,
                 "DB_CONNECTION": "mysql",
@@ -325,6 +354,10 @@ class DeploymentEngine:
             for k, v in my_vars.items():
                 if k not in merged_env or not merged_env.get(k):
                     merged_env[k] = v
+
+            # Normalize pre-injected SQLAlchemy URLs (from psm-api) for Prisma/Node.js runtimes
+            if is_node_or_prisma and merged_env.get("DATABASE_URL", "").startswith("mysql+pymysql://"):
+                merged_env["DATABASE_URL"] = merged_env["DATABASE_URL"].replace("mysql+pymysql://", "mysql://", 1)
 
             log_callback("info", f"[MySQL] Auto-connected project ke MySQL database '{target_db}'.")
             DeploymentEngine._auto_wire_silo_storage(project_name, merged_env, env_example_hint, log_callback)
@@ -699,12 +732,18 @@ class DeploymentEngine:
 
         # 3. Node.js / Prisma
         elif os.path.exists(prisma_path):
-            log_callback("info", "[Post-Deploy] Mendeteksi schema Prisma — Menjalankan 'npx prisma migrate deploy'...")
+            migrations_dir = os.path.join(prisma_path, "migrations")
+            has_migrations = os.path.isdir(migrations_dir) and any(os.scandir(migrations_dir))
             try:
                 import docker
                 client = docker.from_env()
                 cont = client.containers.get(sanitized_name)
-                code, out = cont.exec_run(["npx", "prisma", "migrate", "deploy"])
+                if has_migrations:
+                    log_callback("info", "[Post-Deploy] Mendeteksi schema Prisma & folder migrations — Menjalankan 'prisma migrate deploy'...")
+                    code, out = cont.exec_run(["sh", "-c", "./node_modules/.bin/prisma migrate deploy || npx prisma migrate deploy"])
+                else:
+                    log_callback("info", "[Post-Deploy] Mendeteksi schema Prisma tanpa folder migrations — Menjalankan 'prisma db push --skip-generate'...")
+                    code, out = cont.exec_run(["sh", "-c", "./node_modules/.bin/prisma db push --skip-generate || npx prisma db push --skip-generate"])
                 if out:
                     for line in out.decode("utf-8", errors="ignore").splitlines():
                         if line.strip():
@@ -906,11 +945,47 @@ class DeploymentEngine:
             return False
 
     @staticmethod
+    def _find_safe_host_port(start_port: int = 3100, extra_taken: Optional[set] = None) -> int:
+        """Find the next free host port avoiding CORE_RESERVED_HOST_PORTS and bound Docker ports."""
+        taken = set(CORE_RESERVED_HOST_PORTS.keys())
+        if extra_taken:
+            taken.update(extra_taken)
+        try:
+            import docker
+            client = docker.from_env(timeout=1.0)
+            for cont in client.containers.list():
+                ports_map = cont.attrs.get("NetworkSettings", {}).get("Ports") or {}
+                for bindings in ports_map.values():
+                    if bindings:
+                        for b in bindings:
+                            raw_hp = str(b.get("HostPort") or "").strip()
+                            if raw_hp.isdigit():
+                                taken.add(int(raw_hp))
+        except Exception:
+            pass
+
+        candidate = max(start_port, 3100)
+        while candidate < 65535:
+            if candidate not in taken:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(0.05)
+                try:
+                    if sock.connect_ex(("127.0.0.1", candidate)) != 0:
+                        return candidate
+                except Exception:
+                    return candidate
+                finally:
+                    sock.close()
+            candidate += 1
+        return candidate
+
+    @staticmethod
     def parse_port_mappings(
         explicit_mappings: Optional[str],
         full_df_path: str,
         workspace_dir: str,
-        log_callback: Callable[[str, str], None]
+        log_callback: Callable[[str, str], None],
+        avoid_reserved_host_ports: bool = False,
     ) -> Tuple[List[str], Dict[str, int], int]:
         """
         Parses port configuration with multi-layer intelligence:
@@ -920,9 +995,25 @@ class DeploymentEngine:
            was a default placeholder that conflicts with what the Dockerfile actually exposes (e.g. 8080 or 80),
            and intelligently aligns the container port.
         3. Sets accurate Host -> Container mappings for Docker CLI and SDK.
+           When avoid_reserved_host_ports=True, automatically remaps reserved host ports
+           such as 3000 (Grafana) to a free port >= 3100.
         """
         cli_args: List[str] = []
         sdk_ports: Dict[str, int] = {}
+        used_host_ports: set = set()
+
+        def _ensure_safe_hp(raw_hp: int, cp: int) -> int:
+            if avoid_reserved_host_ports and (raw_hp in CORE_RESERVED_HOST_PORTS or raw_hp in used_host_ports):
+                reason = CORE_RESERVED_HOST_PORTS.get(raw_hp, f"port {raw_hp} yang sudah digunakan")
+                safe_hp = DeploymentEngine._find_safe_host_port(3100, extra_taken=used_host_ports)
+                log_callback(
+                    "warning",
+                    f"[Docker-Port] Port host {raw_hp} dipakai oleh {reason} — mengalihkan otomatis ke Host {safe_hp} -> Container {cp}."
+                )
+                used_host_ports.add(safe_hp)
+                return safe_hp
+            used_host_ports.add(raw_hp)
+            return raw_hp
 
         # 1. Inspect Dockerfile for EXPOSE ports
         detected_exposed_ports: List[int] = []
@@ -994,6 +1085,7 @@ class DeploymentEngine:
                     else:
                         continue
 
+                    hp = _ensure_safe_hp(hp, cp)
                     cli_args.extend(["-p", f"{hp}:{cp}"])
                     sdk_ports[f"{cp}/tcp"] = hp
                     if not parsed_any:
@@ -1015,6 +1107,7 @@ class DeploymentEngine:
                     else:
                         hp = int(p_val)
                         cp = primary_target_cp
+                    hp = _ensure_safe_hp(hp, cp)
                     cli_args.extend(["-p", f"{hp}:{cp}"])
                     sdk_ports[f"{cp}/tcp"] = hp
                     primary_container_port = cp
@@ -1026,18 +1119,20 @@ class DeploymentEngine:
         # 5. Check Dockerfile EXPOSE
         if not parsed_any and detected_exposed_ports:
             for p in detected_exposed_ports:
-                cli_args.extend(["-p", f"{p}:{p}"])
-                sdk_ports[f"{p}/tcp"] = p
+                hp = _ensure_safe_hp(p, p)
+                cli_args.extend(["-p", f"{hp}:{p}"])
+                sdk_ports[f"{p}/tcp"] = hp
             primary_container_port = detected_exposed_ports[0]
             parsed_any = True
-            log_callback("info", f"[Docker-Port] Terdeteksi EXPOSE {primary_container_port} pada Dockerfile: Host {primary_container_port} -> Container {primary_container_port}")
+            log_callback("info", f"[Docker-Port] Terdeteksi EXPOSE {primary_container_port} pada Dockerfile -> Container {primary_container_port}")
 
         # 6. Fallback default
         if not parsed_any:
-            cli_args.extend(["-p", f"{primary_target_cp}:{primary_target_cp}"])
-            sdk_ports[f"{primary_target_cp}/tcp"] = primary_target_cp
+            hp = _ensure_safe_hp(primary_target_cp, primary_target_cp)
+            cli_args.extend(["-p", f"{hp}:{primary_target_cp}"])
+            sdk_ports[f"{primary_target_cp}/tcp"] = hp
             primary_container_port = primary_target_cp
-            log_callback("info", f"[Docker-Port] Port default otomatis: Mapping Host {primary_container_port} -> Container {primary_container_port}")
+            log_callback("info", f"[Docker-Port] Port default otomatis: Mapping Host {hp} -> Container {primary_container_port}")
 
         return cli_args, sdk_ports, primary_container_port
 
@@ -1161,7 +1256,8 @@ class DeploymentEngine:
             explicit_mappings=port_mappings,
             full_df_path=full_df_path,
             workspace_dir=workspace_dir,
-            log_callback=log_callback
+            log_callback=log_callback,
+            avoid_reserved_host_ports=True,
         )
         env_dict = DeploymentEngine._load_env_dict(workspace_dir)
         if "PORT" not in env_dict:

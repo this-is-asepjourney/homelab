@@ -43,7 +43,7 @@ export function resolveProjectAccess(project: any, servers: any[] = []): Project
     ? (rawDomain.includes('.') ? rawDomain : `${rawDomain}.homelab`)
     : `${domainSlug}.homelab`;
 
-  const portMappings = (project?.port_mappings || '3000:3000').trim();
+  const portMappings = (project?.port_mappings || '').trim();
   const firstPair = portMappings.split(',')[0]?.trim() || '';
   const rawHostPort = firstPair.includes(':') ? firstPair.split(':')[0].trim() : firstPair;
   const hostPort = rawHostPort && /^\d+$/.test(rawHostPort) ? rawHostPort : null;

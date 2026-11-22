@@ -49,6 +49,27 @@ import { api, formatBytes, getApiBase } from '../../../lib/api';
 import { resolveProjectAccess } from '../../../lib/utils';
 import { DeployProjectModal } from '../../../components/deploy-project-modal';
 
+const RESERVED_SYSTEM_PORTS: Record<number, string> = {
+  53: 'CoreDNS (:53)',
+  80: 'Nginx Ingress Router (:80)',
+  1883: 'Mosquitto MQTT (:1883)',
+  3000: 'Grafana (:3000)',
+  3001: 'Uptime Kuma (:3001)',
+  3005: 'PSM Console Web (:3005)',
+  3306: 'MySQL 8.4 (:3306)',
+  5432: 'PostgreSQL 16 (:5432)',
+  6379: 'Redis 7 (:6379)',
+  8000: 'PAP Core API Gateway (:8000)',
+  8001: 'PSM Control Plane API (:8001)',
+  8080: 'Nextcloud (:8080)',
+  8081: 'cAdvisor (:8081)',
+  9000: 'MinIO S3 API (:9000)',
+  9002: 'MinIO Web Console (:9002)',
+  9090: 'Prometheus (:9090)',
+  9100: 'Node Exporter (:9100)',
+  9273: 'Telegraf Exporter (:9273)',
+};
+
 export default function ProjectDetailPage() {
   const params = useParams();
   const router = useRouter();
@@ -70,6 +91,8 @@ export default function ProjectDetailPage() {
   const [deploying, setDeploying] = useState(false);
   const [deployModalOpen, setDeployModalOpen] = useState(false);
   const [portMappingsInput, setPortMappingsInput] = useState('');
+  const [recommendedPort, setRecommendedPort] = useState<number>(3100);
+  const [reservedPorts, setReservedPorts] = useState<Record<number, string>>(RESERVED_SYSTEM_PORTS);
   const [savingPorts, setSavingPorts] = useState(false);
   const [provisioningDb, setProvisioningDb] = useState(false);
   const [customDbName, setCustomDbName] = useState('');
@@ -171,7 +194,7 @@ export default function ProjectDetailPage() {
   const loadData = async () => {
     try {
       setLoading(true);
-      const [p, d, env, dbData, s, cInfo, cLogs] = await Promise.all([
+      const [p, d, env, dbData, s, cInfo, cLogs, portRes] = await Promise.all([
         api.getProject(projectId),
         api.getDeployments().then((list) => list.filter((item: any) => item.project_id === projectId)),
         api.getProjectEnvironment(projectId, true),
@@ -179,7 +202,14 @@ export default function ProjectDetailPage() {
         api.getServers().catch(() => []),
         api.getProjectContainer(projectId).catch(() => null),
         api.getProjectContainerLogs(projectId, 250).catch(() => ({ logs: '' })),
+        api.getNextAvailablePort().catch(() => null),
       ]);
+      if (portRes?.recommended_host_port) {
+        setRecommendedPort(portRes.recommended_host_port);
+      }
+      if (portRes?.reserved_ports) {
+        setReservedPorts({ ...portRes.reserved_ports, ...RESERVED_SYSTEM_PORTS });
+      }
       setProject(p);
       setProjectName(p?.name || '');
       setProjectDescription(p?.description || '');
@@ -203,7 +233,8 @@ export default function ProjectDetailPage() {
       setServers(s);
       setContainerInfo(cInfo);
       setContainerLogs(cLogs?.logs || '');
-      setPortMappingsInput(p?.port_mappings || '3000:3000');
+      const fallbackPort = portRes?.recommended_host_port ? `${portRes.recommended_host_port}:3000` : '3100:3000';
+      setPortMappingsInput(p?.port_mappings || fallbackPort);
       setSelectedDbType(p?.db_type || dbData?.db_type || 'postgres');
       if (dbData?.db_name) {
         setCustomDbName(dbData.db_name);
@@ -329,7 +360,36 @@ export default function ProjectDetailPage() {
     }
   };
 
+  const firstPortPair = (portMappingsInput || '').split(',')[0]?.trim() || '';
+  const [parsedHostPortStr, parsedContainerPortStr] = firstPortPair.includes(':')
+    ? firstPortPair.split(':').map((s) => s.trim())
+    : [firstPortPair, '3000'];
+  const parsedHostPortNum = parseInt(parsedHostPortStr, 10);
+  const effectiveContainerPort = /^\d+$/.test(parsedContainerPortStr || '') ? parsedContainerPortStr : '3000';
+  const rawSettingsPortConflict = !isNaN(parsedHostPortNum) ? reservedPorts[parsedHostPortNum] : null;
+  const isCorePortConflict = !isNaN(parsedHostPortNum) && Boolean(RESERVED_SYSTEM_PORTS[parsedHostPortNum]);
+  const currentProjectHostPorts = (project?.port_mappings || '')
+    .split(',')
+    .map((entry: string) => entry.trim().split(':')[0].trim())
+    .filter(Boolean);
+  const isSelfSettingsPort = Boolean(
+    project &&
+      rawSettingsPortConflict &&
+      !isCorePortConflict &&
+      (
+        rawSettingsPortConflict.toLowerCase().includes((project.name || '').toLowerCase()) ||
+        currentProjectHostPorts.includes(String(parsedHostPortNum))
+      )
+  );
+  const settingsPortConflictReason = isSelfSettingsPort ? null : rawSettingsPortConflict;
+
   const handleUpdateProjectSettings = async (deployNow: boolean = false) => {
+    if (settingsPortConflictReason) {
+      alert(
+        `Port host ${parsedHostPortStr} bentrok dengan ${settingsPortConflictReason}. Klik 'Auto-Bebas :${recommendedPort}' atau ganti host port terlebih dahulu.`
+      );
+      return;
+    }
     try {
       if (deployNow) {
         setDeployingToServer(true);
@@ -835,7 +895,7 @@ export default function ProjectDetailPage() {
               )}
               <span className="flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-blue-500/10 text-blue-500 border border-blue-500/20">
                 <Globe className="w-3 h-3" />
-                <span>Port: {project?.port_mappings || '3000:3000'}</span>
+                <span>Port: {project?.port_mappings || '—'}</span>
               </span>
               {dbInfo && currentDbType !== 'none' && (
                 <button
@@ -2600,7 +2660,7 @@ export default function ProjectDetailPage() {
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div className="p-3 rounded-lg bg-background border border-border">
                 <span className="text-gray-400 block mb-1">Mapping Konfigurasi</span>
-                <span className="text-blue-500 font-bold text-sm">{project?.port_mappings || '3000:3000'}</span>
+                <span className="text-blue-500 font-bold text-sm">{project?.port_mappings || '—'}</span>
               </div>
               <div className="p-3 rounded-lg bg-background border border-border">
                 <span className="text-gray-400 block mb-1">Server Host URL</span>
@@ -3125,14 +3185,24 @@ export default function ProjectDetailPage() {
 
           {/* Card 4: Port Mappings */}
           <div className="rounded-xl border border-border bg-card p-5 space-y-4 text-xs">
-            <div>
-              <h3 className="font-bold text-sm text-foreground flex items-center gap-2">
-                <Globe className="w-4 h-4 text-blue-500" />
-                <span>Konfigurasi Port Mapping Docker</span>
-              </h3>
-              <p className="text-gray-500 mt-0.5">
-                Ubah port host dan port internal container yang diekspos oleh Docker saat deployment ke server.
-              </p>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div>
+                <h3 className="font-bold text-sm text-foreground flex items-center gap-2">
+                  <Globe className="w-4 h-4 text-blue-500" />
+                  <span>Konfigurasi Port Mapping Docker</span>
+                </h3>
+                <p className="text-gray-500 mt-0.5">
+                  Ubah port host dan port internal container yang diekspos oleh Docker saat deployment ke server.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPortMappingsInput(`${recommendedPort}:${effectiveContainerPort}`)}
+                className="px-2.5 py-1.5 rounded-lg bg-blue-600/15 hover:bg-blue-600/25 text-blue-400 border border-blue-500/30 font-semibold text-xs shrink-0 flex items-center gap-1 self-start sm:self-auto"
+                title="Pilih host port bebas konflik otomatis (>= 3100)"
+              >
+                <Sparkles className="w-3.5 h-3.5" /> Auto-Bebas :{recommendedPort}
+              </button>
             </div>
 
             <div>
@@ -3143,25 +3213,51 @@ export default function ProjectDetailPage() {
                 type="text"
                 value={portMappingsInput}
                 onChange={(e) => setPortMappingsInput(e.target.value)}
-                placeholder="3000:3000"
-                className="w-full sm:w-1/2 px-3 py-2 rounded-lg bg-background border border-border text-foreground font-mono text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
+                placeholder={`${recommendedPort}:3000`}
+                className={`w-full sm:w-1/2 px-3 py-2 rounded-lg bg-background border text-foreground font-mono text-xs focus:outline-none focus:ring-2 ${
+                  settingsPortConflictReason
+                    ? 'border-rose-500/80 focus:ring-rose-500'
+                    : 'border-border focus:ring-blue-500'
+                }`}
               />
 
-              {/* Quick Preset Buttons */}
+              {settingsPortConflictReason && (
+                <div className="mt-2.5 p-3 rounded-xl border border-rose-500/40 bg-rose-500/10 text-rose-300 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                    <span>
+                      Port Host <b>{parsedHostPortStr}</b> sudah dipakai oleh <b>{settingsPortConflictReason}</b>!
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setPortMappingsInput(`${recommendedPort}:${effectiveContainerPort}`)}
+                    className="px-2.5 py-1 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-semibold text-xs shrink-0 flex items-center gap-1 shadow-sm self-start sm:self-auto"
+                  >
+                    <Sparkles className="w-3.5 h-3.5" /> Gunakan Port Aman :{recommendedPort}
+                  </button>
+                </div>
+              )}
+
+              {/* Quick Safe Preset Buttons */}
               <div className="flex flex-wrap gap-2 pt-2 text-[11px]">
-                <span className="text-gray-500 self-center">Preset:</span>
+                <span className="text-gray-500 self-center">Preset Bebas Konflik:</span>
                 {[
-                  '3000:3000',
-                  '8080:80',
-                  '8000:8000',
-                  '5000:5000',
-                  '80:80',
+                  `${recommendedPort}:3000`,
+                  `${recommendedPort}:8000`,
+                  `${recommendedPort}:8080`,
+                  `${recommendedPort}:5000`,
+                  `${recommendedPort}:80`,
                 ].map((preset) => (
                   <button
                     key={preset}
                     type="button"
                     onClick={() => setPortMappingsInput(preset)}
-                    className="px-2.5 py-1 rounded-lg border border-border hover:bg-background text-gray-400 hover:text-foreground font-mono"
+                    className={`px-2.5 py-1 rounded-lg border font-mono transition-colors ${
+                      portMappingsInput.trim() === preset
+                        ? 'bg-blue-600 text-white border-blue-600'
+                        : 'border-border hover:bg-background text-gray-400 hover:text-foreground'
+                    }`}
                   >
                     {preset}
                   </button>

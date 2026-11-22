@@ -72,7 +72,7 @@ def handle_deployment_git(payload: Dict[str, Any], log_cb: Callable) -> Dict[str
     commit_hash = payload.get("commit_hash")
     compose_path = payload.get("compose_path", "docker-compose.yml")
     dockerfile_path = payload.get("dockerfile_path", "Dockerfile")
-    port_mappings = payload.get("port_mappings", "3000:3000")
+    port_mappings = payload.get("port_mappings")
     image_tag = payload.get("image_tag", f"{project_name}:latest")
     env_vars = payload.get("environment_variables", {})
     db_config = payload.get("database_config", {})
@@ -150,7 +150,7 @@ def handle_deployment_zip(payload: Dict[str, Any], log_cb: Callable) -> Dict[str
     image_tag = payload.get("image_tag", f"{project_name}:latest")
     dockerfile_path = payload.get("dockerfile_path", "Dockerfile")
     compose_path = payload.get("compose_path", "docker-compose.yml")
-    port_mappings = payload.get("port_mappings", "3000:3000")
+    port_mappings = payload.get("port_mappings")
     env_vars = payload.get("environment_variables", {})
     db_config = payload.get("database_config", {})
 
