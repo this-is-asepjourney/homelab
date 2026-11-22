@@ -367,6 +367,8 @@ services:
       PROMETHEUS_URL: http://prometheus:9090
       PAP_API_URL: http://pap-api:8000
       PAP_API_KEY: ${PAP_PSM_SERVICE_KEY:-pap_key_psm_control_plane_default_secret_key_2026}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - psm_storage:/opt/psm
@@ -408,6 +410,8 @@ services:
       MINIO_PORT: 9000
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-admin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-admin12345}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - psm_storage:/opt/psm

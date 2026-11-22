@@ -259,6 +259,126 @@ def test_parse_port_mappings_avoids_reserved_grafana_3000(tmp_path):
     assert "-p" in cli_safe and "3105:3000" in cli_safe
 
 
+def test_parse_port_mappings_avoids_live_docker_port_and_excludes_self(tmp_path, monkeypatch):
+    df_path = tmp_path / "Dockerfile"
+    df_path.write_text("FROM node:20-alpine\nEXPOSE 3000\n")
+
+    def fake_live(exclude_container_name=None):
+        if exclude_container_name and "stock-umkm" in exclude_container_name:
+            return {}
+        return {3100: "Container Docker: stock-umkm (Port 3100)"}
+
+    monkeypatch.setattr(DeploymentEngine, "_collect_live_host_ports", staticmethod(fake_live))
+    monkeypatch.setattr(DeploymentEngine, "_is_host_port_open", staticmethod(lambda port, probe_hosts=None: False))
+
+    logs = []
+    cli_args, sdk_ports, primary_cp = DeploymentEngine.parse_port_mappings(
+        explicit_mappings="3100:3000",
+        full_df_path=str(df_path),
+        workspace_dir=str(tmp_path),
+        log_callback=lambda lvl, msg: logs.append((lvl, msg)),
+        avoid_reserved_host_ports=True,
+        exclude_container_name="financial-app",
+    )
+    assert primary_cp == 3000
+    assert sdk_ports == {"3000/tcp": 3101}
+    assert "3101:3000" in cli_args
+    assert any("stock-umkm" in msg for _, msg in logs)
+
+    # Same port bound by self (`stock-umkm`) must be retained when replacing `stock-umkm`
+    df_stock = tmp_path / "Dockerfile.stock"
+    df_stock.write_text("FROM php:8.4-apache\nEXPOSE 80\n")
+    logs_self = []
+    cli_self, sdk_self, primary_self_cp = DeploymentEngine.parse_port_mappings(
+        explicit_mappings="3100:80",
+        full_df_path=str(df_stock),
+        workspace_dir=str(tmp_path),
+        log_callback=lambda lvl, msg: logs_self.append((lvl, msg)),
+        avoid_reserved_host_ports=True,
+        exclude_container_name="stock-umkm",
+    )
+    assert primary_self_cp == 80
+    assert sdk_self == {"80/tcp": 3100}
+    assert "3100:80" in cli_self
+
+
+def test_build_and_run_dockerfile_auto_retries_on_port_already_allocated(tmp_path, monkeypatch):
+    import shutil
+    import subprocess
+
+    df_path = tmp_path / "Dockerfile"
+    df_path.write_text("FROM node:20-alpine\nEXPOSE 3000\nCMD [\"node\", \"server.js\"]\n")
+
+    monkeypatch.setattr(DeploymentEngine, "_collect_live_host_ports", staticmethod(lambda exclude_container_name=None: {}))
+    monkeypatch.setattr(DeploymentEngine, "_is_host_port_open", staticmethod(lambda port, probe_hosts=None: False))
+    monkeypatch.setattr(DeploymentEngine, "_resolve_psm_network_name", staticmethod(lambda: "homelab"))
+    monkeypatch.setattr(DeploymentEngine, "run_post_deploy_db_migrations", staticmethod(lambda *args, **kwargs: None))
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/docker" if name == "docker" else None)
+
+    rm_calls = []
+
+    class _Completed:
+        def __init__(self, returncode=0, stdout="", stderr=""):
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    def fake_run(cmd, *args, **kwargs):
+        if len(cmd) >= 3 and cmd[1] == "rm":
+            rm_calls.append(cmd)
+        return _Completed(returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    run_cmds = []
+
+    class _FakePopen:
+        def __init__(self, cmd, *args, **kwargs):
+            self.cmd = cmd
+            if cmd[1] == "build":
+                self.stdout = iter(["#1 DONE\n"])
+                self.returncode = 0
+            elif cmd[1] == "run":
+                run_cmds.append(cmd)
+                if len(run_cmds) == 1:
+                    self.stdout = iter([
+                        "6acf4a9f\n",
+                        "docker: Error response from daemon: Bind for 0.0.0.0:3100 failed: port is already allocated\n",
+                    ])
+                    self.returncode = 125
+                else:
+                    self.stdout = iter(["newcontainerid123\n"])
+                    self.returncode = 0
+            else:
+                self.stdout = iter([])
+                self.returncode = 0
+
+        def wait(self):
+            return self.returncode
+
+    monkeypatch.setattr(subprocess, "Popen", _FakePopen)
+
+    logs = []
+    effective_out = []
+    ok = DeploymentEngine.build_and_run_dockerfile(
+        workspace_dir=str(tmp_path),
+        dockerfile_path="Dockerfile",
+        image_tag="financial-app:v4",
+        container_name="financial-app",
+        log_callback=lambda lvl, msg: logs.append((lvl, msg)),
+        port_mappings="3100:3000",
+        effective_ports_out=effective_out,
+    )
+
+    assert ok is True
+    assert len(run_cmds) == 2
+    assert "3100:3000" in run_cmds[0]
+    assert "3101:3000" in run_cmds[1]
+    assert len(rm_calls) >= 2  # initial cleanup + post-collision cleanup before retry
+    assert effective_out == ["3101:3000"]
+    assert any("3101" in msg and "percobaan 2/5" in msg for lvl, msg in logs if lvl == "warning")
+
+
 
 
 

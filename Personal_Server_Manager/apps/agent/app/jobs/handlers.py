@@ -118,6 +118,7 @@ def handle_deployment_git(payload: Dict[str, Any], log_cb: Callable) -> Dict[str
     # 4 & 5. Build Image & Run Container
     target_db_type = db_config.get("db_type") or payload.get("db_type") or merged_env.get("DB_CONNECTION") or "auto"
     deployed = False
+    effective_ports: list[str] = []
     if resolved_path == compose_path or resolved_path.endswith(".yml") or resolved_path.endswith(".yaml"):
         log_cb("info", f"[STAGE:4/5] Membangun & Menjalankan Stack Compose dari '{resolved_path}'...")
         deployed = DeploymentEngine.build_and_deploy_compose(target_dir, resolved_path, log_cb)
@@ -131,6 +132,7 @@ def handle_deployment_git(payload: Dict[str, Any], log_cb: Callable) -> Dict[str
             log_callback=log_cb,
             port_mappings=port_mappings,
             db_type=target_db_type,
+            effective_ports_out=effective_ports,
         )
 
     if not deployed:
@@ -139,9 +141,22 @@ def handle_deployment_git(payload: Dict[str, Any], log_cb: Callable) -> Dict[str
         log_cb("error", f"[DIAGNOSTIC] Cara Cek di Server Ubuntu: docker logs --tail 50 psm-agent  ATAU  cd /opt/psm/workspaces/{project_id} && docker build -t test .")
         raise RuntimeError("Proses build atau peluncuran container gagal. Lihat log deployment.")
 
+    effective_port_mappings = ", ".join(effective_ports) if effective_ports else (port_mappings or "")
+    port_reassigned = bool(
+        effective_port_mappings
+        and port_mappings
+        and effective_port_mappings.strip() != str(port_mappings).strip()
+    )
+
     log_cb("info", f"[STAGE:5/5] Meluncurkan Container & Healthcheck: Container '{project_name}' aktif di jaringan.")
     log_cb("info", f"[STAGE:DONE] Deployment selesai dengan sukses! Layanan '{project_name}' siap menerima koneksi.")
-    return {"success": True, "workspace": target_dir, "image_tag": image_tag}
+    return {
+        "success": True,
+        "workspace": target_dir,
+        "image_tag": image_tag,
+        "effective_port_mappings": effective_port_mappings,
+        "port_reassigned": port_reassigned,
+    }
 
 def handle_deployment_zip(payload: Dict[str, Any], log_cb: Callable) -> Dict[str, Any]:
     project_id = payload.get("project_id")
@@ -182,6 +197,7 @@ def handle_deployment_zip(payload: Dict[str, Any], log_cb: Callable) -> Dict[str
     )
 
     deployed = False
+    effective_ports: list[str] = []
     target_db_type = db_config.get("db_type") or payload.get("db_type") or merged_env.get("DB_CONNECTION") or "auto"
     if resolved_path == compose_path or resolved_path.endswith(".yml") or resolved_path.endswith(".yaml"):
         log_cb("info", f"[STAGE:4/5] Membangun & Menjalankan Stack Compose dari '{resolved_path}'...")
@@ -196,15 +212,28 @@ def handle_deployment_zip(payload: Dict[str, Any], log_cb: Callable) -> Dict[str
             log_callback=log_cb,
             port_mappings=port_mappings,
             db_type=target_db_type,
+            effective_ports_out=effective_ports,
         )
 
     if not deployed:
         log_cb("error", f"[STAGE:FAILED] Proses build image atau peluncuran container ZIP '{project_name}' gagal.")
         raise RuntimeError("Proses build atau peluncuran container ZIP gagal")
 
+    effective_port_mappings = ", ".join(effective_ports) if effective_ports else (port_mappings or "")
+    port_reassigned = bool(
+        effective_port_mappings
+        and port_mappings
+        and effective_port_mappings.strip() != str(port_mappings).strip()
+    )
+
     log_cb("info", f"[STAGE:5/5] Meluncurkan Container & Healthcheck: Container '{project_name}' aktif di jaringan.")
     log_cb("info", f"[STAGE:DONE] Deployment selesai dengan sukses! Layanan '{project_name}' siap menerima koneksi.")
-    return {"success": True, "workspace": target_dir}
+    return {
+        "success": True,
+        "workspace": target_dir,
+        "effective_port_mappings": effective_port_mappings,
+        "port_reassigned": port_reassigned,
+    }
 
 def handle_deployment_rollback(payload: Dict[str, Any], log_cb: Callable) -> Dict[str, Any]:
     target_image = payload.get("target_image_tag")

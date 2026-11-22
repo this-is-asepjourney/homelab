@@ -428,11 +428,12 @@ async def create_project(
 
     project_domain = resolve_effective_domain(payload.domain, payload.name)
     project_db_type = getattr(payload, "db_type", "postgres") or "none"
-    resolved_ports, _ = validate_or_allocate_port_mappings(
+    resolved_ports, port_notice = validate_or_allocate_port_mappings(
         db,
         payload.port_mappings,
         framework=payload.framework,
-        auto_fix_reserved=False,
+        exclude_container_name=payload.name,
+        auto_fix_reserved=True,
     )
 
     project = Project(
@@ -529,6 +530,15 @@ async def create_project(
                     message=f"Deployment v1 dimulai otomatis via Git ({source.repository_url} @ {source.branch})"
                 )
             )
+            if port_notice:
+                db.add(
+                    DeploymentLog(
+                        deployment_id=deployment.id,
+                        sequence=2,
+                        level="warning",
+                        message=f"[Port-Guard] {port_notice}",
+                    )
+                )
             db.commit()
 
             # Retrieve all stored decrypted environment variables
@@ -802,7 +812,7 @@ async def update_project(
             framework=payload.framework or p.framework,
             exclude_project_id=p.id,
             exclude_container_name=p.name,
-            auto_fix_reserved=False,
+            auto_fix_reserved=bool(payload.redeploy),
         )
         p.port_mappings = resolved_ports
     if payload.domain is not None:

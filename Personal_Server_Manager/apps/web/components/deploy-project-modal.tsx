@@ -62,6 +62,19 @@ const RESERVED_SYSTEM_PORTS: Record<number, string> = {
   9273: 'Telegraf Exporter (:9273)',
 };
 
+function isConflictOwnedByProject(conflictLabel: string, proj: any): boolean {
+  if (!conflictLabel || !proj?.name) return false;
+  const rawName = String(proj.name).trim().toLowerCase();
+  if (!rawName) return false;
+  const slugName = rawName.replace(/[^a-z0-9_.-]/g, '-');
+  const label = conflictLabel.trim().toLowerCase();
+  return (
+    label.startsWith(`project: ${rawName} (`) ||
+    label.startsWith(`container docker: ${rawName} (`) ||
+    label.startsWith(`container docker: ${slugName} (`)
+  );
+}
+
 export function DeployProjectModal({
   isOpen,
   onClose,
@@ -91,6 +104,7 @@ export function DeployProjectModal({
   const [containerPort, setContainerPort] = useState('3000');
   const [recommendedPort, setRecommendedPort] = useState(3100);
   const [reservedPorts, setReservedPorts] = useState<Record<number, string>>(RESERVED_SYSTEM_PORTS);
+  const [autoAdjustedPortNotice, setAutoAdjustedPortNotice] = useState<string | null>(null);
   const [additionalPorts, setAdditionalPorts] = useState<Array<{ host: string; container: string }>>([]);
   const [domain, setDomain] = useState(existingProject?.domain || '');
 
@@ -208,21 +222,43 @@ export function DeployProjectModal({
   useEffect(() => {
     if (!isOpen) return;
     let mounted = true;
+    setAutoAdjustedPortNotice(null);
     api.getNextAvailablePort().then((res) => {
       if (mounted && res && res.recommended_host_port) {
+        const mergedReserved: Record<number, string> = {
+          ...(res.reserved_ports || {}),
+          ...RESERVED_SYSTEM_PORTS,
+        };
         setRecommendedPort(res.recommended_host_port);
-        if (res.reserved_ports) {
-          setReservedPorts({ ...res.reserved_ports, ...RESERVED_SYSTEM_PORTS });
-        }
-        if (!existingProject && (hostPort === '3000' || hostPort === '3100')) {
-          setHostPort(String(res.recommended_host_port));
+        setReservedPorts(mergedReserved);
+
+        if (!existingProject) {
+          const curNum = parseInt(hostPort.trim(), 10);
+          if (hostPort === '3000' || hostPort === '3100' || (!isNaN(curNum) && Boolean(mergedReserved[curNum]))) {
+            setHostPort(String(res.recommended_host_port));
+          }
+        } else {
+          const firstEntry = (existingProject.port_mappings || '').split(',')[0]?.trim() || '';
+          const rawHp = firstEntry.includes(':') ? firstEntry.split(':')[0].trim() : firstEntry;
+          const oldHp = rawHp ? parseInt(rawHp, 10) : parseInt(hostPort.trim() || '3100', 10);
+          if (!isNaN(oldHp) && mergedReserved[oldHp]) {
+            const conflictOwner = mergedReserved[oldHp];
+            const isCore = Boolean(RESERVED_SYSTEM_PORTS[oldHp]);
+            const ownedBySelf = !isCore && isConflictOwnedByProject(conflictOwner, existingProject);
+            if (!ownedBySelf) {
+              setHostPort(String(res.recommended_host_port));
+              setAutoAdjustedPortNotice(
+                `Port lama :${oldHp} bentrok dengan ${conflictOwner} — otomatis disesuaikan ke port aman :${res.recommended_host_port}.`
+              );
+            }
+          }
         }
       }
     }).catch(() => {});
     return () => {
       mounted = false;
     };
-  }, [isOpen]);
+  }, [isOpen, existingProject?.id]);
 
   // Initialize from existing project if supplied
   useEffect(() => {
@@ -311,20 +347,13 @@ export function DeployProjectModal({
   const currentHpNum = parseInt(hostPort.trim(), 10);
   const rawPortConflict = !isNaN(currentHpNum) ? reservedPorts[currentHpNum] : null;
   const isCoreSystemPort = !isNaN(currentHpNum) && Boolean(RESERVED_SYSTEM_PORTS[currentHpNum]);
-  const existingHostPorts = (existingProject?.port_mappings || '')
-    .split(',')
-    .map((entry: string) => entry.trim().split(':')[0].trim())
-    .filter(Boolean);
-  // If editing an existing project, using its own non-core active port is valid;
-  // core homelab ports (e.g. 3000 = Grafana) are NEVER exempt!
+  // If editing an existing project, only exempt ports actively owned by THIS project/container;
+  // core homelab ports (e.g. 3000 = Grafana) and ports held by other containers are NEVER exempt!
   const isSelfProjectPort = Boolean(
     existingProject &&
     rawPortConflict &&
     !isCoreSystemPort &&
-    (
-      rawPortConflict.toLowerCase().includes((existingProject.name || '').toLowerCase()) ||
-      existingHostPorts.includes(String(currentHpNum))
-    )
+    isConflictOwnedByProject(rawPortConflict, existingProject)
   );
   const portConflictReason = isSelfProjectPort ? null : rawPortConflict;
   const serverHost = selectedServer?.hostname || 'localhost';
@@ -333,6 +362,7 @@ export function DeployProjectModal({
   const applyPortPreset = (hp: string, cp: string) => {
     setHostPort(hp);
     setContainerPort(cp);
+    setAutoAdjustedPortNotice(null);
   };
 
   // Change framework presets with non-conflicting host port
@@ -1077,7 +1107,10 @@ export function DeployProjectModal({
                       </label>
                       <button
                         type="button"
-                        onClick={() => setHostPort(String(recommendedPort))}
+                        onClick={() => {
+                          setHostPort(String(recommendedPort));
+                          setAutoAdjustedPortNotice(null);
+                        }}
                         className="text-[10px] text-blue-400 hover:text-blue-300 font-semibold flex items-center gap-1"
                         title="Pilih port yang dijamin bebas"
                       >
@@ -1090,7 +1123,10 @@ export function DeployProjectModal({
                       min={1}
                       max={65535}
                       value={hostPort}
-                      onChange={(e) => setHostPort(e.target.value)}
+                      onChange={(e) => {
+                        setHostPort(e.target.value);
+                        setAutoAdjustedPortNotice(null);
+                      }}
                       placeholder={String(recommendedPort)}
                       className={`w-full px-3 py-2 rounded-lg bg-background border text-foreground font-mono text-sm focus:outline-none focus:ring-2 ${
                         portConflictReason
@@ -1124,6 +1160,14 @@ export function DeployProjectModal({
                     <span className="text-[10px] text-gray-500">Port aplikasi (misal Next.js=3000, Web=80)</span>
                   </div>
                 </div>
+
+                {/* Auto-Adjusted Port Banner */}
+                {autoAdjustedPortNotice && !portConflictReason && (
+                  <div className="p-3 rounded-xl border border-blue-500/35 bg-blue-500/10 text-blue-300 text-xs flex items-center gap-2 animate-in fade-in">
+                    <Sparkles className="w-4 h-4 text-blue-400 shrink-0" />
+                    <span>{autoAdjustedPortNotice}</span>
+                  </div>
+                )}
 
                 {/* Conflict Alert Box */}
                 {portConflictReason && (

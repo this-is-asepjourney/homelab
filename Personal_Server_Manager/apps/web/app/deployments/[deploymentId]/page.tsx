@@ -67,6 +67,8 @@ export default function DeploymentDetailPage() {
   const [redeploying, setRedeploying] = useState(false);
 
   const logsEndRef = useRef<HTMLDivElement>(null);
+  const loadedProjectIdRef = useRef<string | null>(null);
+  const lastSyncedStatusRef = useRef<string | null>(null);
 
   const loadData = async () => {
     try {
@@ -79,10 +81,14 @@ export default function DeploymentDetailPage() {
       setLogs(l || []);
       setServers(s || []);
 
-      if (d?.project_id && !project) {
+      const statusChangedToSuccess = d?.status === 'success' && lastSyncedStatusRef.current !== 'success';
+      const needsInitialProject = Boolean(d?.project_id && loadedProjectIdRef.current !== d.project_id);
+      if (d?.project_id && (needsInitialProject || statusChangedToSuccess)) {
         try {
           const p = await api.getProject(d.project_id);
           setProject(p);
+          loadedProjectIdRef.current = d.project_id;
+          lastSyncedStatusRef.current = d?.status || null;
         } catch (_) {}
       }
     } catch (_) {}

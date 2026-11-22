@@ -88,28 +88,16 @@ async def create_git_deployment(
 
     # Update port_mappings, domain, db_type, and env vars if provided in deploy payload
     old_db_type = (project.db_type or "").strip().lower()
-    port_notice: Optional[str] = None
-    if payload.port_mappings and payload.port_mappings.strip():
-        resolved_ports, _ = validate_or_allocate_port_mappings(
-            db,
-            payload.port_mappings,
-            framework=project.framework,
-            exclude_project_id=project.id,
-            exclude_container_name=project.name,
-            auto_fix_reserved=False,
-        )
-        project.port_mappings = resolved_ports
-    else:
-        resolved_ports, port_notice = validate_or_allocate_port_mappings(
-            db,
-            project.port_mappings,
-            framework=project.framework,
-            exclude_project_id=project.id,
-            exclude_container_name=project.name,
-            auto_fix_reserved=True,
-        )
-        if resolved_ports != project.port_mappings:
-            project.port_mappings = resolved_ports
+    target_ports = payload.port_mappings if (payload.port_mappings and payload.port_mappings.strip()) else project.port_mappings
+    resolved_ports, port_notice = validate_or_allocate_port_mappings(
+        db,
+        target_ports,
+        framework=project.framework,
+        exclude_project_id=project.id,
+        exclude_container_name=project.name,
+        auto_fix_reserved=True,
+    )
+    project.port_mappings = resolved_ports
 
     if payload.domain and payload.domain.strip():
         project.domain = resolve_effective_domain(payload.domain, project.name)
@@ -296,28 +284,16 @@ async def finalize_zip_upload(
 
     # Update port mappings and db_type if provided with upload
     old_db_type = (project.db_type or "").strip().lower()
-    port_notice: Optional[str] = None
-    if port_mappings and port_mappings.strip():
-        resolved_ports, _ = validate_or_allocate_port_mappings(
-            db,
-            port_mappings,
-            framework=project.framework,
-            exclude_project_id=project.id,
-            exclude_container_name=project.name,
-            auto_fix_reserved=False,
-        )
-        project.port_mappings = resolved_ports
-    else:
-        resolved_ports, port_notice = validate_or_allocate_port_mappings(
-            db,
-            project.port_mappings,
-            framework=project.framework,
-            exclude_project_id=project.id,
-            exclude_container_name=project.name,
-            auto_fix_reserved=True,
-        )
-        if resolved_ports != project.port_mappings:
-            project.port_mappings = resolved_ports
+    target_ports = port_mappings if (port_mappings and port_mappings.strip()) else project.port_mappings
+    resolved_ports, port_notice = validate_or_allocate_port_mappings(
+        db,
+        target_ports,
+        framework=project.framework,
+        exclude_project_id=project.id,
+        exclude_container_name=project.name,
+        auto_fix_reserved=True,
+    )
+    project.port_mappings = resolved_ports
 
     db_type_changed = False
     if db_type:

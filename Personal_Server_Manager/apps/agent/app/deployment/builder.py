@@ -944,38 +944,158 @@ class DeploymentEngine:
             log_callback("error", f"[Compose] Process execution error: {e}")
             return False
 
+    _CLI_HOST_PORT_RE = re.compile(r"(?:[\d.]+|\[[^\]]*\]):(\d+)->")
+    _BIND_CONFLICT_PORT_RE = re.compile(
+        r"(?:Bind\s+for\s+(?:[\d.]+|\[[^\]]*\]):|listen\s+tcp\d?\s+(?:[\d.]+|\[[^\]]*\]):)(\d+)",
+        re.IGNORECASE,
+    )
+
     @staticmethod
-    def _find_safe_host_port(start_port: int = 3100, extra_taken: Optional[set] = None) -> int:
-        """Find the next free host port avoiding CORE_RESERVED_HOST_PORTS and bound Docker ports."""
-        taken = set(CORE_RESERVED_HOST_PORTS.keys())
-        if extra_taken:
-            taken.update(extra_taken)
+    def _is_port_conflict_error(output_text: str) -> bool:
+        """Detect Docker port collision / host bind failure messages."""
+        low = (output_text or "").lower()
+        return (
+            "port is already allocated" in low
+            or "address already in use" in low
+            or "ports are not available" in low
+            or ("bind for" in low and "failed" in low)
+        )
+
+    @staticmethod
+    def _extract_conflicting_host_ports(output_text: str) -> List[int]:
+        """Extract conflicting host port numbers from Docker daemon error text."""
+        found: List[int] = []
+        seen = set()
+        for m in DeploymentEngine._BIND_CONFLICT_PORT_RE.findall(output_text or ""):
+            if m.isdigit():
+                p = int(m)
+                if 1 <= p <= 65535 and p not in seen:
+                    seen.add(p)
+                    found.append(p)
+        return found
+
+    @staticmethod
+    def _get_host_probe_targets() -> List[str]:
+        """Return loopback plus host-gateway/LAN IP when running inside a Linux container."""
+        hosts: List[str] = ["127.0.0.1"]
+        in_container = os.path.exists("/.dockerenv") or os.path.exists("/var/run/docker.sock")
+        if in_container:
+            try:
+                socket.gethostbyname("host.docker.internal")
+                hosts.append("host.docker.internal")
+            except Exception:
+                pass
+            for env_key in ("HOST_IP", "SERVER_LAN_IP"):
+                val = (os.getenv(env_key) or "").strip()
+                if val and val not in ("0.0.0.0", "127.0.0.1") and val not in hosts:
+                    hosts.append(val)
+        return hosts
+
+    @staticmethod
+    def _is_host_port_open(port: int, probe_hosts: Optional[List[str]] = None) -> bool:
+        """Return True if any host target accepts TCP connections on `port`."""
+        targets = probe_hosts if probe_hosts is not None else DeploymentEngine._get_host_probe_targets()
+        for host in targets:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(0.05)
+            try:
+                if sock.connect_ex((host, port)) == 0:
+                    return True
+            except Exception:
+                continue
+            finally:
+                sock.close()
+        return False
+
+    @staticmethod
+    def _collect_live_host_ports(exclude_container_name: Optional[str] = None) -> Dict[int, str]:
+        """Collect host ports bound by running Docker containers via SDK or CLI fallback."""
+        live_ports: Dict[int, str] = {}
+        sanitized_exclude = (
+            re.sub(r"[^a-zA-Z0-9_.-]", "-", exclude_container_name.strip().lstrip("/").lower())
+            if exclude_container_name
+            else None
+        )
+        raw_exclude = exclude_container_name.strip().lstrip("/").lower() if exclude_container_name else None
+
+        def _is_self(cname: str) -> bool:
+            if not sanitized_exclude:
+                return False
+            c_low = cname.strip().lstrip("/").lower()
+            c_slug = re.sub(r"[^a-zA-Z0-9_.-]", "-", c_low)
+            return c_low == raw_exclude or c_slug == sanitized_exclude
+
         try:
             import docker
-            client = docker.from_env(timeout=1.0)
+
+            client = docker.from_env(timeout=1.5)
             for cont in client.containers.list():
+                cname = (cont.name or "").strip() or "unknown"
+                if _is_self(cname):
+                    continue
                 ports_map = cont.attrs.get("NetworkSettings", {}).get("Ports") or {}
                 for bindings in ports_map.values():
                     if bindings:
                         for b in bindings:
                             raw_hp = str(b.get("HostPort") or "").strip()
                             if raw_hp.isdigit():
-                                taken.add(int(raw_hp))
+                                hp = int(raw_hp)
+                                live_ports.setdefault(hp, f"Container Docker: {cname} (Port {hp})")
+            if live_ports:
+                return live_ports
         except Exception:
             pass
 
+        try:
+            docker_bin = shutil.which("docker") or "docker"
+            res = subprocess.run(
+                [docker_bin, "ps", "--format", "{{.Names}}\t{{.Ports}}"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=3,
+            )
+            if res.returncode == 0:
+                for line in (res.stdout or "").splitlines():
+                    if not line.strip() or "\t" not in line:
+                        continue
+                    cname, ports_str = line.split("\t", 1)
+                    cname = cname.strip().lstrip("/")
+                    if _is_self(cname):
+                        continue
+                    for match in DeploymentEngine._CLI_HOST_PORT_RE.findall(ports_str):
+                        if match.isdigit():
+                            hp = int(match)
+                            if 1 <= hp <= 65535:
+                                live_ports.setdefault(hp, f"Container Docker: {cname} (Port {hp})")
+        except Exception:
+            pass
+
+        return live_ports
+
+    @staticmethod
+    def _find_safe_host_port(
+        start_port: int = 3100,
+        extra_taken: Optional[set] = None,
+        exclude_container_name: Optional[str] = None,
+        live_taken: Optional[Dict[int, str]] = None,
+    ) -> int:
+        """Find the next free host port avoiding CORE_RESERVED_HOST_PORTS, live Docker bindings, and open host sockets."""
+        taken = set(CORE_RESERVED_HOST_PORTS.keys())
+        resolved_live = (
+            live_taken
+            if live_taken is not None
+            else DeploymentEngine._collect_live_host_ports(exclude_container_name=exclude_container_name)
+        )
+        taken.update(resolved_live.keys())
+        if extra_taken:
+            taken.update(extra_taken)
+
+        probe_hosts = DeploymentEngine._get_host_probe_targets()
         candidate = max(start_port, 3100)
         while candidate < 65535:
-            if candidate not in taken:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.settimeout(0.05)
-                try:
-                    if sock.connect_ex(("127.0.0.1", candidate)) != 0:
-                        return candidate
-                except Exception:
-                    return candidate
-                finally:
-                    sock.close()
+            if candidate not in taken and not DeploymentEngine._is_host_port_open(candidate, probe_hosts):
+                return candidate
             candidate += 1
         return candidate
 
@@ -986,6 +1106,7 @@ class DeploymentEngine:
         workspace_dir: str,
         log_callback: Callable[[str, str], None],
         avoid_reserved_host_ports: bool = False,
+        exclude_container_name: Optional[str] = None,
     ) -> Tuple[List[str], Dict[str, int], int]:
         """
         Parses port configuration with multi-layer intelligence:
@@ -995,23 +1116,41 @@ class DeploymentEngine:
            was a default placeholder that conflicts with what the Dockerfile actually exposes (e.g. 8080 or 80),
            and intelligently aligns the container port.
         3. Sets accurate Host -> Container mappings for Docker CLI and SDK.
-           When avoid_reserved_host_ports=True, automatically remaps reserved host ports
-           such as 3000 (Grafana) to a free port >= 3100.
+           When avoid_reserved_host_ports=True, automatically remaps reserved/bound host ports
+           (including 3000 Grafana and live Docker container/host ports) to a free port >= 3100.
         """
         cli_args: List[str] = []
         sdk_ports: Dict[str, int] = {}
         used_host_ports: set = set()
+        live_taken = (
+            DeploymentEngine._collect_live_host_ports(exclude_container_name=exclude_container_name)
+            if avoid_reserved_host_ports
+            else {}
+        )
+        probe_hosts = DeploymentEngine._get_host_probe_targets() if avoid_reserved_host_ports else []
 
         def _ensure_safe_hp(raw_hp: int, cp: int) -> int:
-            if avoid_reserved_host_ports and (raw_hp in CORE_RESERVED_HOST_PORTS or raw_hp in used_host_ports):
-                reason = CORE_RESERVED_HOST_PORTS.get(raw_hp, f"port {raw_hp} yang sudah digunakan")
-                safe_hp = DeploymentEngine._find_safe_host_port(3100, extra_taken=used_host_ports)
-                log_callback(
-                    "warning",
-                    f"[Docker-Port] Port host {raw_hp} dipakai oleh {reason} — mengalihkan otomatis ke Host {safe_hp} -> Container {cp}."
+            if avoid_reserved_host_ports:
+                reason = (
+                    CORE_RESERVED_HOST_PORTS.get(raw_hp)
+                    or live_taken.get(raw_hp)
+                    or (f"port {raw_hp} yang sudah digunakan" if raw_hp in used_host_ports else None)
                 )
-                used_host_ports.add(safe_hp)
-                return safe_hp
+                if not reason and DeploymentEngine._is_host_port_open(raw_hp, probe_hosts):
+                    reason = f"service aktif di host (Port {raw_hp})"
+                if reason:
+                    safe_hp = DeploymentEngine._find_safe_host_port(
+                        3100,
+                        extra_taken=used_host_ports | {raw_hp},
+                        exclude_container_name=exclude_container_name,
+                        live_taken=live_taken,
+                    )
+                    log_callback(
+                        "warning",
+                        f"[Docker-Port] Port host {raw_hp} sudah digunakan oleh {reason} — mengalihkan otomatis ke Host {safe_hp} -> Container {cp}."
+                    )
+                    used_host_ports.add(safe_hp)
+                    return safe_hp
             used_host_ports.add(raw_hp)
             return raw_hp
 
@@ -1216,6 +1355,55 @@ class DeploymentEngine:
         return "psm-network"
 
     @staticmethod
+    def _parse_cli_port_pairs(port_args: List[str]) -> List[Tuple[int, int]]:
+        """Extract (host_port, container_port) pairs from CLI args like ['-p', '3100:3000']."""
+        pairs: List[Tuple[int, int]] = []
+        for token in port_args:
+            if ":" in token:
+                hp_str, cp_str = token.split(":", 1)
+                if hp_str.strip().isdigit() and cp_str.strip().isdigit():
+                    pairs.append((int(hp_str.strip()), int(cp_str.strip())))
+        return pairs
+
+    @staticmethod
+    def _reassign_conflicting_mappings(
+        current_mappings: List[Tuple[int, int]],
+        failed_host_ports: set,
+        error_output: str,
+        exclude_container_name: str,
+        attempt: int,
+        max_retries: int,
+        log_callback: Callable[[str, str], None],
+    ) -> List[Tuple[int, int]]:
+        """Re-allocate only the conflicting host ports onto the next free ports on the host."""
+        conflicted_in_err = set(DeploymentEngine._extract_conflicting_host_ports(error_output))
+        target_conflicts = {hp for hp, _ in current_mappings if hp in conflicted_in_err}
+        if not target_conflicts:
+            target_conflicts = {hp for hp, _ in current_mappings}
+        failed_host_ports.update(target_conflicts)
+
+        fresh_live = DeploymentEngine._collect_live_host_ports(exclude_container_name=exclude_container_name)
+        kept_hps = {hp for hp, _ in current_mappings if hp not in target_conflicts}
+        updated: List[Tuple[int, int]] = []
+        for hp, cp in current_mappings:
+            if hp in target_conflicts:
+                new_hp = DeploymentEngine._find_safe_host_port(
+                    start_port=3100,
+                    extra_taken=failed_host_ports | kept_hps,
+                    exclude_container_name=exclude_container_name,
+                    live_taken=fresh_live,
+                )
+                log_callback(
+                    "warning",
+                    f"[Docker-Port] Port host {hp} sudah terpakai di host — otomatis mencoba ulang pada Host {new_hp} -> Container {cp} (percobaan {attempt + 1}/{max_retries})...",
+                )
+                kept_hps.add(new_hp)
+                updated.append((new_hp, cp))
+            else:
+                updated.append((hp, cp))
+        return updated
+
+    @staticmethod
     def build_and_run_dockerfile(
         workspace_dir: str,
         dockerfile_path: str,
@@ -1224,9 +1412,11 @@ class DeploymentEngine:
         log_callback: Callable[[str, str], None],
         port_mappings: Optional[str] = None,
         db_type: str = "auto",
+        effective_ports_out: Optional[List[str]] = None,
     ) -> bool:
         """Build image using Dockerfile and launch container directly.
-        Automatically attaches container to the homelab network (psm-network)
+        Automatically attaches container to the homelab network (psm-network),
+        retries with the next free host port on bind collisions,
         and runs post-deploy database migrations if applicable.
         """
         full_df_path = os.path.join(workspace_dir, dockerfile_path)
@@ -1252,17 +1442,22 @@ class DeploymentEngine:
         target_network = DeploymentEngine._resolve_psm_network_name()
 
         # Parse ports & ensure PORT env
-        port_args, ports_mapping, primary_port = DeploymentEngine.parse_port_mappings(
+        port_args, _, primary_port = DeploymentEngine.parse_port_mappings(
             explicit_mappings=port_mappings,
             full_df_path=full_df_path,
             workspace_dir=workspace_dir,
             log_callback=log_callback,
             avoid_reserved_host_ports=True,
+            exclude_container_name=sanitized_name,
         )
         env_dict = DeploymentEngine._load_env_dict(workspace_dir)
         if "PORT" not in env_dict:
             env_dict["PORT"] = str(primary_port)
             DeploymentEngine.write_env_file(workspace_dir, env_dict)
+
+        current_mappings = DeploymentEngine._parse_cli_port_pairs(port_args)
+        MAX_PORT_RETRIES = 5
+        failed_host_ports: set = set()
 
         # 1. Check if Docker CLI is available
         docker_bin = shutil.which("docker") or "/usr/bin/docker"
@@ -1300,45 +1495,72 @@ class DeploymentEngine:
             subprocess.run([docker_bin, "stop", sanitized_name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             subprocess.run([docker_bin, "rm", "-f", sanitized_name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-            # Ports, Network & Run (with lean resource boundaries for homelab stability)
-            run_cmd = [
-                docker_bin, "run", "-d",
-                "--restart", "unless-stopped",
-                "--name", sanitized_name,
-                "--memory=768m",
-                "--cpus=1.0",
-                "--add-host=host.docker.internal:host-gateway",
-            ]
+            env_file_path = os.path.join(workspace_dir, ".env")
+            has_env_file = os.path.exists(env_file_path)
             if target_network:
-                run_cmd.extend(["--network", target_network])
                 log_callback("info", f"[PostgreSQL] Attaching container '{sanitized_name}' to database network '{target_network}'")
 
-            env_file_path = os.path.join(workspace_dir, ".env")
-            if os.path.exists(env_file_path):
-                run_cmd.extend(["--env-file", ".env"])
-            run_cmd.extend(port_args)
-            run_cmd.append(sanitized_tag)
+            for attempt in range(1, MAX_PORT_RETRIES + 1):
+                attempt_port_args: List[str] = []
+                for hp, cp in current_mappings:
+                    attempt_port_args.extend(["-p", f"{hp}:{cp}"])
 
-            log_callback("info", f"[Docker-CLI] Running container: {' '.join(run_cmd)}")
-            try:
-                run_proc = subprocess.Popen(run_cmd, cwd=workspace_dir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-                for line in run_proc.stdout:
-                    clean = line.strip()
-                    if clean:
-                        log_callback("info", clean)
-                run_proc.wait()
-                if run_proc.returncode != 0:
+                run_cmd = [
+                    docker_bin, "run", "-d",
+                    "--restart", "unless-stopped",
+                    "--name", sanitized_name,
+                    "--memory=768m",
+                    "--cpus=1.0",
+                    "--add-host=host.docker.internal:host-gateway",
+                ]
+                if target_network:
+                    run_cmd.extend(["--network", target_network])
+                if has_env_file:
+                    run_cmd.extend(["--env-file", ".env"])
+                run_cmd.extend(attempt_port_args)
+                run_cmd.append(sanitized_tag)
+
+                log_callback("info", f"[Docker-CLI] Running container: {' '.join(run_cmd)}")
+                try:
+                    run_proc = subprocess.Popen(run_cmd, cwd=workspace_dir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                    run_output_lines: List[str] = []
+                    for line in run_proc.stdout:
+                        clean = line.strip()
+                        if clean:
+                            run_output_lines.append(clean)
+                            log_callback("info", clean)
+                    run_proc.wait()
+
+                    if run_proc.returncode == 0:
+                        if effective_ports_out is not None:
+                            effective_ports_out[:] = [f"{hp}:{cp}" for hp, cp in current_mappings]
+                        log_callback("info", f"[Docker-CLI] Container '{sanitized_name}' is now running successfully!")
+                        DeploymentEngine.run_post_deploy_db_migrations(workspace_dir, sanitized_name, log_callback)
+                        return True
+
+                    combined_out = "\n".join(run_output_lines)
+                    if DeploymentEngine._is_port_conflict_error(combined_out) and attempt < MAX_PORT_RETRIES:
+                        subprocess.run([docker_bin, "rm", "-f", sanitized_name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        current_mappings = DeploymentEngine._reassign_conflicting_mappings(
+                            current_mappings=current_mappings,
+                            failed_host_ports=failed_host_ports,
+                            error_output=combined_out,
+                            exclude_container_name=sanitized_name,
+                            attempt=attempt,
+                            max_retries=MAX_PORT_RETRIES,
+                            log_callback=log_callback,
+                        )
+                        continue
+
                     log_callback("error", f"[Docker-CLI] Container launch failed with exit code {run_proc.returncode}")
                     log_callback("error", f"[DIAGNOSTIC] Container gagal berjalan. Kemungkinan port host bentrok atau parameter invalid.")
                     log_callback("error", f"[DIAGNOSTIC] Cara Cek di Server Ubuntu: docker ps -a --filter name={sanitized_name} && docker logs --tail 30 {sanitized_name}")
                     return False
+                except Exception as e:
+                    log_callback("error", f"[Docker-CLI] Launch execution error: {e}")
+                    return False
 
-                log_callback("info", f"[Docker-CLI] Container '{sanitized_name}' is now running successfully!")
-                DeploymentEngine.run_post_deploy_db_migrations(workspace_dir, sanitized_name, log_callback)
-                return True
-            except Exception as e:
-                log_callback("error", f"[Docker-CLI] Launch execution error: {e}")
-                return False
+            return False
 
         # 2. FALLBACK: Use Python Docker SDK directly through /var/run/docker.sock
         log_callback("info", "[Docker-SDK] Utilizing Docker daemon socket connection...")
@@ -1382,23 +1604,49 @@ class DeploymentEngine:
             if target_network:
                 log_callback("info", f"[PostgreSQL] Attaching container '{sanitized_name}' to database network '{target_network}'")
 
-            log_callback("info", f"[Docker-SDK] Launching container '{sanitized_name}'...")
-            run_kwargs: Dict[str, Any] = {
-                "image": sanitized_tag,
-                "name": sanitized_name,
-                "detach": True,
-                "restart_policy": {"Name": "unless-stopped"},
-                "ports": ports_mapping if ports_mapping else None,
-                "environment": env_dict if env_dict else None,
-                "extra_hosts": {"host.docker.internal": "host-gateway"},
-            }
-            if target_network:
-                run_kwargs["network"] = target_network
+            for attempt in range(1, MAX_PORT_RETRIES + 1):
+                attempt_ports_map = {f"{cp}/tcp": hp for hp, cp in current_mappings}
+                log_callback("info", f"[Docker-SDK] Launching container '{sanitized_name}'...")
+                run_kwargs: Dict[str, Any] = {
+                    "image": sanitized_tag,
+                    "name": sanitized_name,
+                    "detach": True,
+                    "restart_policy": {"Name": "unless-stopped"},
+                    "ports": attempt_ports_map if attempt_ports_map else None,
+                    "environment": env_dict if env_dict else None,
+                    "extra_hosts": {"host.docker.internal": "host-gateway"},
+                }
+                if target_network:
+                    run_kwargs["network"] = target_network
 
-            c = client.containers.run(**run_kwargs)
-            log_callback("info", f"[Docker-SDK] Container '{sanitized_name}' ({c.short_id}) launched and operational!")
-            DeploymentEngine.run_post_deploy_db_migrations(workspace_dir, sanitized_name, log_callback)
-            return True
+                try:
+                    c = client.containers.run(**run_kwargs)
+                    if effective_ports_out is not None:
+                        effective_ports_out[:] = [f"{hp}:{cp}" for hp, cp in current_mappings]
+                    log_callback("info", f"[Docker-SDK] Container '{sanitized_name}' ({c.short_id}) launched and operational!")
+                    DeploymentEngine.run_post_deploy_db_migrations(workspace_dir, sanitized_name, log_callback)
+                    return True
+                except Exception as sdk_err:
+                    err_text = str(sdk_err)
+                    if DeploymentEngine._is_port_conflict_error(err_text) and attempt < MAX_PORT_RETRIES:
+                        try:
+                            client.containers.get(sanitized_name).remove(force=True)
+                        except Exception:
+                            pass
+                        current_mappings = DeploymentEngine._reassign_conflicting_mappings(
+                            current_mappings=current_mappings,
+                            failed_host_ports=failed_host_ports,
+                            error_output=err_text,
+                            exclude_container_name=sanitized_name,
+                            attempt=attempt,
+                            max_retries=MAX_PORT_RETRIES,
+                            log_callback=log_callback,
+                        )
+                        continue
+                    log_callback("error", f"[Docker-SDK] Failure via Docker daemon socket: {sdk_err}")
+                    return False
+
+            return False
         except Exception as sdk_err:
             log_callback("error", f"[Docker-SDK] Failure via Docker daemon socket: {sdk_err}")
             return False
