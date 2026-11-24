@@ -1,4 +1,3 @@
-import pytest
 import os
 import zipfile
 from apps.agent.app.collectors.metrics import get_metrics_snapshot, get_system_info
