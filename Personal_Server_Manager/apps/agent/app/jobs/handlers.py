@@ -133,6 +133,7 @@ def handle_deployment_git(payload: Dict[str, Any], log_cb: Callable) -> Dict[str
             port_mappings=port_mappings,
             db_type=target_db_type,
             effective_ports_out=effective_ports,
+            no_cache=bool(payload.get("no_cache", False)),
         )
 
     if not deployed:
@@ -213,6 +214,7 @@ def handle_deployment_zip(payload: Dict[str, Any], log_cb: Callable) -> Dict[str
             port_mappings=port_mappings,
             db_type=target_db_type,
             effective_ports_out=effective_ports,
+            no_cache=bool(payload.get("no_cache", False)),
         )
 
     if not deployed:

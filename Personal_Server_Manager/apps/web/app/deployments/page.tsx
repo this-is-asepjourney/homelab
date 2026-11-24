@@ -44,6 +44,17 @@ export default function DeploymentsPage() {
     loadDeployments();
   }, []);
 
+  useEffect(() => {
+    const hasActive = deployments.some((d) =>
+      ['queued', 'preparing', 'building', 'deploying', 'rolling_back'].includes(d.status)
+    );
+    if (!hasActive) return;
+    const timer = setInterval(() => {
+      api.getDeployments().then((list) => setDeployments(list)).catch(() => {});
+    }, 4000);
+    return () => clearInterval(timer);
+  }, [deployments]);
+
   const handleRedeploy = async (d: any) => {
     if (!d?.project_id) return;
     try {

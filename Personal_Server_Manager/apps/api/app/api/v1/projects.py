@@ -612,7 +612,8 @@ def get_project(
 async def execute_project_redeploy(
     db: Session,
     project: Project,
-    current_user_id: str
+    current_user_id: str,
+    no_cache: bool = False,
 ) -> DeploymentResponse:
     src = project.source
     if src and src.repository_url:
@@ -646,11 +647,12 @@ async def execute_project_redeploy(
     db.refresh(deployment)
 
     source_desc = f"Git ({src.repository_url} @ {src.branch or 'main'})" if (src and src.repository_url) else "Server Archive"
+    cache_note = " (No-Cache Clean Build)" if no_cache else ""
     initial_log = DeploymentLog(
         deployment_id=deployment.id,
         sequence=1,
         level="info",
-        message=f"Deployment v{version} triggered via Project Update / Redeploy to Server ({source_desc})"
+        message=f"Deployment v{version} triggered via Project Update / Redeploy to Server ({source_desc}){cache_note}"
     )
     db.add(initial_log)
     db.commit()
@@ -708,6 +710,7 @@ async def execute_project_redeploy(
             "image_tag": image_tag,
             "version": version,
             "db_type": project.db_type,
+            "no_cache": bool(no_cache),
             "environment_variables": full_env,
             "database_config": db_info,
             "git_token": get_stored_token(),
@@ -726,6 +729,7 @@ async def execute_project_redeploy(
             "compose_path": src.compose_path or "docker-compose.yml",
             "port_mappings": project.port_mappings,
             "db_type": project.db_type,
+            "no_cache": bool(no_cache),
             "environment_variables": full_env,
             "database_config": db_info,
             "git_token": get_stored_token(),
@@ -1033,6 +1037,7 @@ def sync_project_domain_endpoint(
 @router.post("/{project_id}/redeploy", response_model=DeploymentResponse)
 async def redeploy_project(
     project_id: str,
+    no_cache: bool = False,
     current_user: User = Depends(require_role("owner", "admin", "operator")),
     db: Session = Depends(get_db)
 ):
@@ -1043,7 +1048,7 @@ async def redeploy_project(
     p = db.query(Project).filter(Project.id == project_id).first()
     if not p:
         raise HTTPException(status_code=404, detail="Project not found")
-    return await execute_project_redeploy(db=db, project=p, current_user_id=current_user.id)
+    return await execute_project_redeploy(db=db, project=p, current_user_id=current_user.id, no_cache=no_cache)
 
 @router.delete("/{project_id}")
 def delete_project(

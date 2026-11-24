@@ -302,7 +302,7 @@ def claim_job(server: Server = Depends(get_current_agent), db: Session = Depends
     return {"job": JobResponse.model_validate(job)}
 
 @router.post("/jobs/{job_id}/complete")
-def finish_job(
+async def finish_job(
     job_id: str,
     payload: JobCompleteRequest,
     server: Server = Depends(get_current_agent),
@@ -318,6 +318,18 @@ def finish_job(
     )
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+    if job.deployment_id:
+        await ws_manager.broadcast_deployment_log(
+            job.deployment_id,
+            {
+                "event": "deployment.status",
+                "deployment_id": job.deployment_id,
+                "status": "success" if payload.status == "success" else "failed",
+                "duration_seconds": payload.duration_seconds,
+                "error_message": payload.error_message,
+                "output": payload.output or {},
+            },
+        )
     return {"status": "ok", "job_id": job.id}
 
 @router.post("/jobs/{job_id}/logs")

@@ -379,6 +379,96 @@ def test_build_and_run_dockerfile_auto_retries_on_port_already_allocated(tmp_pat
     assert any("3101" in msg and "percobaan 2/5" in msg for lvl, msg in logs if lvl == "warning")
 
 
+def test_classify_build_line_and_extract_excerpt():
+    assert DeploymentEngine._classify_build_line("ERR_PNPM_OUTDATED_LOCKFILE Cannot install") == "error"
+    assert DeploymentEngine._classify_build_line("Module not found: Can't resolve 'dagre'") == "error"
+    assert DeploymentEngine._classify_build_line("npm error code EUSAGE") == "error"
+    assert DeploymentEngine._classify_build_line("[WARN] deprecated glob@10.5.0") == "warning"
+    assert DeploymentEngine._classify_build_line("#9 [builder 3/6] COPY . .") == "info"
+
+    lines = [
+        "#9 [builder 3/6] RUN pnpm install --frozen-lockfile",
+        "ERR_PNPM_OUTDATED_LOCKFILE Cannot install with \"frozen-lockfile\"",
+        "ERROR: failed to solve: process \"/bin/sh -c pnpm install --frozen-lockfile\" did not complete successfully: exit code: 1",
+    ]
+    excerpt = DeploymentEngine._extract_build_failure_excerpt(lines, max_lines=3)
+    assert any("ERR_PNPM_OUTDATED_LOCKFILE" in ln for ln in excerpt)
+
+
+def test_attempt_build_auto_heal_patches_lockfile_and_skips_unrelated(tmp_path):
+    df_pnpm = tmp_path / "Dockerfile"
+    df_pnpm.write_text("FROM node:22-alpine\nRUN pnpm install --frozen-lockfile\n")
+    logs = []
+    healed, kind = DeploymentEngine._attempt_build_auto_heal(
+        workspace_dir=str(tmp_path),
+        dockerfile_path="Dockerfile",
+        build_output='ERR_PNPM_OUTDATED_LOCKFILE Cannot install with "frozen-lockfile"',
+        log_callback=lambda lvl, msg: logs.append((lvl, msg)),
+    )
+    assert healed is True
+    assert kind == "lockfile_fallback"
+    assert "--no-frozen-lockfile" in df_pnpm.read_text()
+    assert "--frozen-lockfile" not in df_pnpm.read_text()
+
+    df_npm = tmp_path / "Dockerfile.npm"
+    df_npm.write_text("FROM node:20-alpine\nRUN npm ci\n")
+    healed_npm, kind_npm = DeploymentEngine._attempt_build_auto_heal(
+        workspace_dir=str(tmp_path),
+        dockerfile_path="Dockerfile.npm",
+        build_output="npm error `npm ci` can only install packages when your package.json and package-lock.json are in sync with package-lock.json",
+        log_callback=lambda lvl, msg: logs.append((lvl, msg)),
+    )
+    assert healed_npm is True
+    assert kind_npm == "lockfile_fallback"
+    assert "npm install --legacy-peer-deps" in df_npm.read_text()
+
+    healed_none, kind_none = DeploymentEngine._attempt_build_auto_heal(
+        workspace_dir=str(tmp_path),
+        dockerfile_path="Dockerfile",
+        build_output="SyntaxError: Unexpected token '}'",
+        log_callback=lambda lvl, msg: logs.append((lvl, msg)),
+    )
+    assert healed_none is False
+    assert kind_none == ""
+
+
+def test_realtime_log_streamer_batches_and_flushes(monkeypatch):
+    import time
+    from apps.agent.app.jobs.executor import _RealtimeLogStreamer
+
+    sent_batches = []
+
+    class _Resp:
+        status_code = 200
+
+    class _FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def post(self, url, json=None, headers=None):
+            sent_batches.append((url, json["logs"]))
+            return _Resp()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("apps.agent.app.jobs.executor.httpx.Client", _FakeClient)
+
+    streamer = _RealtimeLogStreamer(job_id="job-123", flush_interval=2.0, max_batch_size=3)
+    streamer.enqueue({"sequence": 1, "level": "info", "message": "line 1"})
+    streamer.enqueue({"sequence": 2, "level": "info", "message": "line 2"})
+    streamer.enqueue({"sequence": 3, "level": "info", "message": "line 3"})
+    time.sleep(0.1)
+    streamer.enqueue({"sequence": 4, "level": "error", "message": "boom"})
+    time.sleep(0.1)
+    streamer.close()
+
+    flattened = [entry for _, batch in sent_batches for entry in batch]
+    assert [e["sequence"] for e in flattened] == [1, 2, 3, 4]
+    assert len(sent_batches) >= 2
+
+
+
 
 
 

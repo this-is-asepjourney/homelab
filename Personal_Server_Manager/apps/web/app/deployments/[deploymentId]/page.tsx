@@ -65,10 +65,34 @@ export default function DeploymentDetailPage() {
   const [servers, setServers] = useState<any[]>([]);
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [redeploying, setRedeploying] = useState(false);
+  const [rebuildingClean, setRebuildingClean] = useState(false);
+  const [wsStatus, setWsStatus] = useState<'connecting' | 'live' | 'reconnecting' | 'closed'>('connecting');
 
   const logsEndRef = useRef<HTMLDivElement>(null);
+  const consoleScrollRef = useRef<HTMLDivElement>(null);
   const loadedProjectIdRef = useRef<string | null>(null);
   const lastSyncedStatusRef = useRef<string | null>(null);
+  const terminalStateRef = useRef<boolean>(false);
+
+  const mergeLogs = (existing: any[], incoming: any[]) => {
+    if (!incoming || incoming.length === 0) return existing;
+    const map = new Map<string, any>();
+    for (const item of existing) {
+      const key =
+        typeof item?.sequence === 'number' && item.sequence > 0
+          ? `seq:${item.sequence}`
+          : `msg:${item?.level || 'info'}:${item?.message || ''}:${item?.created_at || ''}`;
+      map.set(key, item);
+    }
+    for (const item of incoming) {
+      const key =
+        typeof item?.sequence === 'number' && item.sequence > 0
+          ? `seq:${item.sequence}`
+          : `msg:${item?.level || 'info'}:${item?.message || ''}:${item?.created_at || ''}`;
+      map.set(key, item);
+    }
+    return Array.from(map.values()).sort((a, b) => (a?.sequence || 0) - (b?.sequence || 0));
+  };
 
   const loadData = async () => {
     try {
@@ -78,8 +102,14 @@ export default function DeploymentDetailPage() {
         api.getServers().catch(() => []),
       ]);
       setDeployment(d);
-      setLogs(l || []);
+      setLogs((prev) => mergeLogs(prev, l || []));
       setServers(s || []);
+
+      const isTerm = Boolean(d?.status && ['success', 'failed', 'cancelled'].includes(d.status));
+      terminalStateRef.current = isTerm;
+      if (isTerm) {
+        setWsStatus('closed');
+      }
 
       const statusChangedToSuccess = d?.status === 'success' && lastSyncedStatusRef.current !== 'success';
       const needsInitialProject = Boolean(d?.project_id && loadedProjectIdRef.current !== d.project_id);
@@ -94,47 +124,107 @@ export default function DeploymentDetailPage() {
     } catch (_) {}
   };
 
-  const handleRedeploy = async () => {
+  const handleRedeploy = async (noCache = false) => {
     if (!deployment?.project_id) return;
     try {
-      setRedeploying(true);
-      const dep = await api.redeployProject(deployment.project_id);
+      if (noCache) setRebuildingClean(true);
+      else setRedeploying(true);
+      const dep = await api.redeployProject(deployment.project_id, noCache);
       router.push(`/deployments/${dep.id}`);
     } catch (err: any) {
       alert(err.message || 'Gagal memicu deploy ulang project ke server');
     } finally {
       setRedeploying(false);
+      setRebuildingClean(false);
     }
   };
 
   useEffect(() => {
+    let active = true;
+    let ws: WebSocket | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let retryDelay = 1000;
+
+    terminalStateRef.current = false;
+    setLogs([]);
     loadData();
 
-    // WebSocket connection for live log streaming (LAN-aware)
-    const wsBase = getWsBase();
-    let ws: WebSocket | null = null;
-    try {
-      ws = new WebSocket(`${wsBase}/ws/deployments/${deploymentId}/logs`);
-      ws.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          setLogs((prev) => [...prev, data]);
-        } catch (_) {}
-      };
-    } catch (_) {}
+    const connectWs = () => {
+      if (!active || terminalStateRef.current) return;
+      const wsBase = getWsBase();
+      try {
+        setWsStatus((prev) => (prev === 'live' ? 'live' : 'connecting'));
+        ws = new WebSocket(`${wsBase}/ws/deployments/${deploymentId}/logs`);
+        ws.onopen = () => {
+          if (!active) return;
+          retryDelay = 1000;
+          setWsStatus('live');
+        };
+        ws.onmessage = (event) => {
+          if (!active) return;
+          try {
+            const data = JSON.parse(event.data);
+            if (data?.event === 'deployment.status') {
+              terminalStateRef.current = ['success', 'failed', 'cancelled'].includes(data.status);
+              setDeployment((prev: any) =>
+                prev
+                  ? {
+                      ...prev,
+                      status: data.status,
+                      duration_seconds:
+                        typeof data.duration_seconds === 'number'
+                          ? data.duration_seconds
+                          : prev.duration_seconds,
+                    }
+                  : prev
+              );
+              if (terminalStateRef.current) {
+                setWsStatus('closed');
+              }
+              loadData();
+              return;
+            }
+            setLogs((prev) => mergeLogs(prev, [data]));
+          } catch (_) {}
+        };
+        ws.onclose = () => {
+          if (!active || terminalStateRef.current) return;
+          setWsStatus('reconnecting');
+          reconnectTimer = setTimeout(() => {
+            retryDelay = Math.min(retryDelay * 2, 8000);
+            connectWs();
+          }, retryDelay);
+        };
+        ws.onerror = () => {
+          try {
+            ws?.close();
+          } catch (_) {}
+        };
+      } catch (_) {
+        setWsStatus('reconnecting');
+      }
+    };
 
-    // Polling interval if websocket is inactive or pending
-    const interval = setInterval(loadData, 2500);
+    connectWs();
 
     return () => {
+      active = false;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
       if (ws) ws.close();
-      clearInterval(interval);
     };
   }, [deploymentId]);
 
   const isRunning = useMemo(() => {
-    return ['queued', 'preparing', 'building', 'deploying'].includes(deployment?.status);
+    return ['queued', 'preparing', 'building', 'deploying', 'rolling_back'].includes(deployment?.status);
   }, [deployment?.status]);
+
+  // Safety fallback polling only while deployment is active (stopped automatically once terminal)
+  useEffect(() => {
+    if (deployment && !isRunning) return;
+    const pollMs = wsStatus === 'live' ? 8000 : 3500;
+    const interval = setInterval(loadData, pollMs);
+    return () => clearInterval(interval);
+  }, [deploymentId, isRunning, wsStatus, Boolean(deployment)]);
 
   // Live timer for elapsed time
   useEffect(() => {
@@ -169,6 +259,7 @@ export default function DeploymentDetailPage() {
     stageStatuses: Record<number, 'completed' | 'active' | 'pending' | 'failed'>;
     progressPercent: number;
     latestActivity: string;
+    buildStepLabel: string | null;
   }>(() => {
     if (!deployment) {
       return {
@@ -176,6 +267,7 @@ export default function DeploymentDetailPage() {
         stageStatuses: { 1: 'pending', 2: 'pending', 3: 'pending', 4: 'pending', 5: 'pending' },
         progressPercent: 5,
         latestActivity: 'Inisialisasi pipeline deployment...',
+        buildStepLabel: null,
       };
     }
 
@@ -184,6 +276,7 @@ export default function DeploymentDetailPage() {
 
     let activeStage = 1;
     let dockerStepBonus = 0;
+    let buildStepLabel: string | null = null;
     let latestActivity = 'Menyiapkan proses deployment...';
 
     if (logs && logs.length > 0) {
@@ -204,13 +297,16 @@ export default function DeploymentDetailPage() {
         else if (msg.includes('[STAGE:5/5]')) activeStage = Math.max(activeStage, 5);
         else if (msg.includes('[STAGE:DONE]')) activeStage = 6;
 
-        // Extract Step X/Y for Docker building interpolation
-        const stepMatch = msg.match(/(?:Step|#\d+)\s+([0-9]+)\/([0-9]+)/i);
+        // Extract Step X/Y or BuildKit "#14 [builder 5/10]" progress
+        const stepMatch =
+          msg.match(/(?:Step|#\d+)\s+([0-9]+)\/([0-9]+)/i) ||
+          msg.match(/\[[a-zA-Z0-9_.-]+\s+([0-9]+)\/([0-9]+)\]/);
         if (stepMatch) {
           const cur = parseInt(stepMatch[1], 10);
           const total = parseInt(stepMatch[2], 10);
-          if (total > 0) {
+          if (total > 0 && cur <= total) {
             dockerStepBonus = Math.min(Math.round((cur / total) * 35), 35);
+            buildStepLabel = `Step ${cur}/${total}`;
           }
         }
       }
@@ -277,7 +373,7 @@ export default function DeploymentDetailPage() {
       }
     }
 
-    return { activeStage, stageStatuses, progressPercent, latestActivity };
+    return { activeStage, stageStatuses, progressPercent, latestActivity, buildStepLabel };
   }, [deployment, logs]);
 
   const copyLogs = () => {
@@ -338,13 +434,24 @@ export default function DeploymentDetailPage() {
     reason: string;
     solution: string;
     serverCheckCmd?: string;
+    errorExcerpt?: string[];
   } | null>(() => {
     if (deployment?.status !== 'failed' && deployment?.status !== 'cancelled') return null;
 
     const errorLogs = logs.filter((l) => l.level === 'error').map((l) => l.message);
     const allLogText = logs.map((l) => l.message).join('\n');
+    const allLogLow = allLogText.toLowerCase();
     const projectId = deployment?.project_id || project?.id || '<project-id>';
     const projectName = (deployment?.project_name || project?.name || 'app').toLowerCase().replace(/[^a-zA-Z0-9_.-]/g, '-');
+    const errorExcerpt = errorLogs
+      .filter(
+        (m) =>
+          m &&
+          !m.startsWith('[DIAGNOSTIC]') &&
+          !m.startsWith('[STAGE:FAILED]') &&
+          !m.startsWith('Job failed:')
+      )
+      .slice(-4);
 
     // 1. Git branch error
     if (allLogText.includes('Could not find remote branch') || (allLogText.includes('Remote branch') && allLogText.includes('not found'))) {
@@ -353,8 +460,9 @@ export default function DeploymentDetailPage() {
       return {
         title: 'Branch Git Tidak Ditemukan',
         reason: `Branch '${branch}' tidak ada pada repository remote GitHub (${repoUrl}).`,
-        solution: 'Periksa nama branch di GitHub (perhatikan huruf besar/kecil, misalnya "main" vs "Main"). Klik tombol "Edit & Deploy Ulang" untuk mengganti nama branch target.',
+        solution: 'Periksa nama branch di GitHub (perhatikan huruf besar/kecil, misalnya "main" vs "Main"). Klik tombol "Edit Konfigurasi" untuk mengganti nama branch target.',
         serverCheckCmd: `git ls-remote --heads ${repoUrl}`,
+        errorExcerpt,
       };
     }
 
@@ -368,12 +476,90 @@ export default function DeploymentDetailPage() {
       return {
         title: 'Akses Git / Token GitHub Diperlukan',
         reason: 'Repository ini bersifat privat atau membutuhkan autentikasi Personal Access Token (PAT).',
-        solution: 'Masukkan GitHub Personal Access Token (PAT) Anda melalui menu "Edit & Deploy Ulang" agar server dapat melakukan git clone secara otomatis.',
+        solution: 'Masukkan GitHub Personal Access Token (PAT) Anda melalui menu "Edit Konfigurasi" agar server dapat melakukan git clone secara otomatis.',
         serverCheckCmd: 'docker logs --tail 40 psm-agent',
+        errorExcerpt,
       };
     }
 
-    // 3. Docker build failure
+    // 3. Lockfile / Package manager sync error
+    if (
+      allLogLow.includes('err_pnpm_outdated_lockfile') ||
+      allLogLow.includes('err_pnpm_lockfile_config_mismatch') ||
+      allLogLow.includes('frozen-lockfile') ||
+      allLogLow.includes('in sync with package-lock.json')
+    ) {
+      return {
+        title: 'Ketidakcocokan Lockfile (pnpm / npm)',
+        reason: 'Lockfile (`pnpm-lock.yaml` / `package-lock.json`) tidak sinkron dengan `package.json` atau versi package manager.',
+        solution: 'Sinkronkan lockfile di repo (`pnpm install` / `npm install`) lalu push, atau jalankan Build Bersih (No Cache) setelah update repo.',
+        serverCheckCmd: `cd /opt/psm/workspaces/${projectId} && docker build --no-cache --progress=plain -t test .`,
+        errorExcerpt,
+      };
+    }
+
+    // 4. Out of memory during build or runtime
+    if (
+      allLogLow.includes('oomkilled') ||
+      allLogLow.includes('heap out of memory') ||
+      allLogLow.includes('exit code: 137')
+    ) {
+      return {
+        title: 'Kehabisan Memori (OOMKilled / Exit 137)',
+        reason: 'Proses kompilasi atau container melebihi batas RAM yang tersedia saat build/start.',
+        solution: 'Aktifkan `NODE_OPTIONS=--max-old-space-size=256` di env project, atau lakukan Build Bersih setelah menutup container lain yang berat.',
+        serverCheckCmd: `docker stats --no-stream && docker inspect ${projectName} --format "{{.State.OOMKilled}}"`,
+        errorExcerpt,
+      };
+    }
+
+    // 5. Missing module / TypeScript compilation error
+    if (
+      allLogLow.includes('module not found') ||
+      allLogLow.includes('cannot find module') ||
+      allLogLow.includes('error ts')
+    ) {
+      return {
+        title: 'Module Hilang atau Error Kompilasi TypeScript',
+        reason: 'Aplikasi gagal di-build karena ada package yang belum tercantum di `package.json` atau error tipe TypeScript.',
+        solution: 'Periksa baris error excerpt di bawah untuk melihat nama module/file yang bermasalah, perbaiki di repo, lalu klik Deploy Ulang.',
+        serverCheckCmd: `docker logs --tail 60 psm-agent`,
+        errorExcerpt,
+      };
+    }
+
+    // 6. Network / Registry timeout
+    if (
+      allLogLow.includes('etimedout') ||
+      allLogLow.includes('econnreset') ||
+      allLogLow.includes('eai_again') ||
+      allLogLow.includes('tls handshake timeout')
+    ) {
+      return {
+        title: 'Gangguan Koneksi Registry / Jaringan',
+        reason: 'Unduhan image Docker atau package registry (npm/pnpm/apk/pip) terputus akibat timeout jaringan.',
+        solution: 'Klik tombol "Deploy Ulang" atau "Build Bersih (No Cache)" untuk mengulang unduhan package.',
+        serverCheckCmd: 'docker logs --tail 50 psm-agent',
+        errorExcerpt,
+      };
+    }
+
+    // 7. Container crashed immediately after launch
+    if (
+      allLogLow.includes('berhenti mendadak') ||
+      allLogLow.includes('[containerlog]') ||
+      allLogLow.includes('health=unhealthy')
+    ) {
+      return {
+        title: 'Container Crash Setelah Start',
+        reason: `Container '${projectName}' berhasil dibangun, namun langsung berhenti atau gagal healthcheck setelah dijalankan.`,
+        solution: 'Periksa log container di bawah (sering disebabkan oleh `DATABASE_URL` salah, env wajib belum diisi, atau gagal koneksi DB).',
+        serverCheckCmd: `docker logs --tail 50 ${projectName}`,
+        errorExcerpt,
+      };
+    }
+
+    // 8. Docker build failure
     if (
       allLogText.includes('Build failed with exit code') ||
       allLogText.includes('failed to solve with frontend') ||
@@ -383,12 +569,13 @@ export default function DeploymentDetailPage() {
       return {
         title: 'Kompilasi Dockerfile Gagal',
         reason: 'Docker menemui kegagalan saat menjalankan instruksi build (misal RUN npm install, composer install, atau extension PHP).',
-        solution: 'Tinjau baris merah pada Terminal Log di bawah untuk melihat baris RUN yang gagal. Anda juga dapat memeriksa file di workspace server.',
+        solution: 'Tinjau ringkasan error di bawah atau baris merah pada Terminal Log, lalu coba Deploy Ulang atau Build Bersih.',
         serverCheckCmd: `docker logs --tail 60 psm-agent`,
+        errorExcerpt,
       };
     }
 
-    // 4. Port collision
+    // 9. Port collision
     if (
       allLogText.includes('port is already allocated') ||
       allLogText.includes('address already in use') ||
@@ -398,12 +585,13 @@ export default function DeploymentDetailPage() {
       return {
         title: 'Port Host Bentrok (Port Already in Use)',
         reason: `Port host (${ports}) sedang digunakan oleh container atau service lain di server Ubuntu.`,
-        solution: 'Ubah host port (misalnya ganti 3102:80 menjadi 3105:80) via tombol "Edit & Deploy Ulang" di samping.',
+        solution: 'Ubah host port (misalnya ganti 3102:80 menjadi 3105:80) via tombol "Edit Konfigurasi" di samping.',
         serverCheckCmd: `docker ps --format "table {{.Names}}\t{{.Ports}}"`,
+        errorExcerpt,
       };
     }
 
-    // 5. Interrupted due to agent/server restart
+    // 10. Interrupted due to agent/server restart
     if (
       allLogText.includes('direstart') ||
       allLogText.includes('terhenti karena server/agen') ||
@@ -414,6 +602,7 @@ export default function DeploymentDetailPage() {
         reason: 'Kontainer psm-agent atau host server sempat direstart saat proses build sedang berjalan.',
         solution: 'Klik tombol "Deploy Ulang" di kanan. Proses akan dijalankan kembali dari awal secara bersih.',
         serverCheckCmd: 'docker ps --filter name=psm-agent',
+        errorExcerpt,
       };
     }
 
@@ -424,6 +613,7 @@ export default function DeploymentDetailPage() {
       reason: lastErrorMsg,
       solution: 'Tinjau baris-baris error merah pada Terminal Log di bawah untuk melihat rincian masalah, atau coba klik tombol "Deploy Ulang".',
       serverCheckCmd: `docker logs --tail 50 psm-agent`,
+      errorExcerpt,
     };
   }, [deployment, logs, project]);
 
@@ -538,17 +728,28 @@ export default function DeploymentDetailPage() {
             </button>
           )}
 
-          {/* Quick Redeploy Button */}
+          {/* Quick Redeploy & Clean Rebuild Buttons */}
           {project && !isRunning && (
-            <button
-              onClick={handleRedeploy}
-              disabled={redeploying}
-              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition-all shadow-md shadow-blue-600/20 disabled:opacity-50"
-              title="Deploy ulang project langsung dengan konfigurasi aktif"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${redeploying ? 'animate-spin' : ''}`} />
-              <span>{redeploying ? 'Deploying...' : 'Deploy Ulang'}</span>
-            </button>
+            <>
+              <button
+                onClick={() => handleRedeploy(false)}
+                disabled={redeploying || rebuildingClean}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition-all shadow-md shadow-blue-600/20 disabled:opacity-50"
+                title="Deploy ulang project langsung dengan konfigurasi aktif"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${redeploying ? 'animate-spin' : ''}`} />
+                <span>{redeploying ? 'Deploying...' : 'Deploy Ulang'}</span>
+              </button>
+              <button
+                onClick={() => handleRedeploy(true)}
+                disabled={redeploying || rebuildingClean}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-amber-500/30 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 text-xs font-semibold transition-all disabled:opacity-50"
+                title="Bangun ulang image Docker dari nol tanpa build cache (--no-cache)"
+              >
+                <Sparkles className={`w-3.5 h-3.5 ${rebuildingClean ? 'animate-spin' : ''}`} />
+                <span>{rebuildingClean ? 'Rebuilding...' : 'Build Bersih (No Cache)'}</span>
+              </button>
+            </>
           )}
 
           {deployment?.status === 'success' && (
@@ -591,7 +792,12 @@ export default function DeploymentDetailPage() {
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2.5">
+            {pipelineInfo.buildStepLabel && isRunning && (
+              <span className="px-2 py-0.5 rounded-md text-[11px] font-mono font-semibold bg-cyan-500/10 text-cyan-400 border border-cyan-500/25">
+                {pipelineInfo.buildStepLabel}
+              </span>
+            )}
             <span className="text-xs font-mono font-bold text-foreground">
               {pipelineInfo.progressPercent}% Selesai
             </span>
@@ -716,16 +922,39 @@ export default function DeploymentDetailPage() {
               )}
               {project && (
                 <button
-                  onClick={handleRedeploy}
-                  disabled={redeploying}
-                  className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-rose-500/40 hover:bg-rose-500/20 text-rose-200 text-xs font-semibold transition-all"
+                  onClick={() => handleRedeploy(false)}
+                  disabled={redeploying || rebuildingClean}
+                  className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-rose-500/40 hover:bg-rose-500/20 text-rose-200 text-xs font-semibold transition-all disabled:opacity-50"
                 >
                   <RefreshCw className={`w-3.5 h-3.5 ${redeploying ? 'animate-spin' : ''}`} />
                   <span>Deploy Ulang</span>
                 </button>
               )}
+              {project && (
+                <button
+                  onClick={() => handleRedeploy(true)}
+                  disabled={redeploying || rebuildingClean}
+                  className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-amber-500/40 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 text-xs font-semibold transition-all disabled:opacity-50"
+                >
+                  <Sparkles className={`w-3.5 h-3.5 ${rebuildingClean ? 'animate-spin' : ''}`} />
+                  <span>Build Bersih</span>
+                </button>
+              )}
             </div>
           </div>
+
+          {failureDiagnosis.errorExcerpt && failureDiagnosis.errorExcerpt.length > 0 && (
+            <div className="p-3 rounded-xl bg-slate-950/90 border border-rose-500/25 space-y-1 font-mono text-[11px] text-rose-300">
+              <div className="text-[10px] uppercase tracking-wider text-rose-400 font-bold mb-1">
+                Potongan Error Aktual:
+              </div>
+              {failureDiagnosis.errorExcerpt.map((line, i) => (
+                <div key={i} className="break-all leading-relaxed">
+                  {line}
+                </div>
+              ))}
+            </div>
+          )}
 
           {/* Ubuntu Server CLI Diagnostic Command */}
           {failureDiagnosis.serverCheckCmd && (
@@ -766,6 +995,26 @@ export default function DeploymentDetailPage() {
             <span className="font-semibold text-slate-200">Terminal Build & Deployment Log</span>
             <span className="text-[11px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700">
               {logs.length} baris
+            </span>
+            <span
+              className={`inline-flex items-center gap-1.5 text-[10px] px-2 py-0.5 rounded-full font-semibold border ${
+                wsStatus === 'live'
+                  ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                  : wsStatus === 'closed'
+                  ? 'bg-slate-800 text-slate-400 border-slate-700'
+                  : 'bg-amber-500/10 text-amber-400 border-amber-500/30'
+              }`}
+            >
+              <span
+                className={`w-1.5 h-1.5 rounded-full ${
+                  wsStatus === 'live'
+                    ? 'bg-emerald-400 animate-pulse'
+                    : wsStatus === 'closed'
+                    ? 'bg-slate-500'
+                    : 'bg-amber-400 animate-pulse'
+                }`}
+              />
+              {wsStatus === 'live' ? 'Live WS' : wsStatus === 'closed' ? 'Selesai' : 'Reconnecting'}
             </span>
           </div>
 
@@ -821,68 +1070,96 @@ export default function DeploymentDetailPage() {
         </div>
 
         {/* Console Body */}
-        <div className="p-4 h-[500px] overflow-y-auto space-y-1 text-slate-300 leading-relaxed">
-          {filteredLogs.length === 0 ? (
-            <div className="text-slate-500 italic py-8 text-center flex flex-col items-center gap-2">
-              <Loader2 className="w-5 h-5 animate-spin text-blue-500/50" />
-              <span>
-                {logs.length === 0
-                  ? 'Menghubungkan ke worker stream daemon...'
-                  : 'Tidak ada baris log yang cocok dengan filter pencarian.'}
-              </span>
-            </div>
-          ) : (
-            filteredLogs.map((log, index) => {
-              const isErr = log.level === 'error';
-              const isWarn = log.level === 'warning';
-              const isStage = (log.message || '').includes('[STAGE:');
-              const isDockerStep = /(?:Step|#\d+)\s+[0-9]+\/[0-9]+/i.test(log.message || '');
+        <div className="relative">
+          <div
+            ref={consoleScrollRef}
+            onScroll={() => {
+              const el = consoleScrollRef.current;
+              if (!el) return;
+              const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+              if (!atBottom && autoScroll) {
+                setAutoScroll(false);
+              }
+            }}
+            className="p-4 h-[500px] overflow-y-auto space-y-1 text-slate-300 leading-relaxed"
+          >
+            {filteredLogs.length === 0 ? (
+              <div className="text-slate-500 italic py-8 text-center flex flex-col items-center gap-2">
+                <Loader2 className="w-5 h-5 animate-spin text-blue-500/50" />
+                <span>
+                  {logs.length === 0
+                    ? 'Menghubungkan ke worker stream daemon...'
+                    : 'Tidak ada baris log yang cocok dengan filter pencarian.'}
+                </span>
+              </div>
+            ) : (
+              filteredLogs.map((log, index) => {
+                const isErr = log.level === 'error';
+                const isWarn = log.level === 'warning';
+                const isStage = (log.message || '').includes('[STAGE:');
+                const isDockerStep =
+                  /(?:Step|#\d+)\s+[0-9]+\/[0-9]+/i.test(log.message || '') ||
+                  /\[[a-zA-Z0-9_.-]+\s+[0-9]+\/[0-9]+\]/.test(log.message || '');
 
-              return (
-                <div
-                  key={index}
-                  className={`flex items-start gap-3 hover:bg-slate-900/60 py-0.5 rounded px-2 transition-colors ${
-                    isStage ? 'bg-blue-950/30 border-l-2 border-blue-500' : ''
-                  }`}
-                >
-                  <span className="text-slate-600 select-none w-8 text-right shrink-0 font-mono text-[11px]">
-                    {index + 1}
-                  </span>
-
-                  <span
-                    className={`font-semibold shrink-0 uppercase text-[9px] px-1.5 py-0.5 rounded leading-none mt-0.5 ${
-                      isErr
-                        ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
-                        : isWarn
-                        ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
-                        : isStage
-                        ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30 font-bold'
-                        : 'text-slate-500 bg-slate-900'
+                return (
+                  <div
+                    key={log.sequence ?? index}
+                    className={`flex items-start gap-3 hover:bg-slate-900/60 py-0.5 rounded px-2 transition-colors ${
+                      isStage ? 'bg-blue-950/30 border-l-2 border-blue-500' : ''
                     }`}
                   >
-                    {isStage ? 'STAGE' : log.level || 'info'}
-                  </span>
+                    <span className="text-slate-600 select-none w-8 text-right shrink-0 font-mono text-[11px]">
+                      {index + 1}
+                    </span>
 
-                  <span
-                    className={`break-all ${
-                      isErr
-                        ? 'text-rose-300 font-medium'
-                        : isWarn
-                        ? 'text-amber-200'
-                        : isStage
-                        ? 'text-blue-300 font-semibold'
-                        : isDockerStep
-                        ? 'text-cyan-300 font-mono'
-                        : 'text-slate-200'
-                    }`}
-                  >
-                    {log.message}
-                  </span>
-                </div>
-              );
-            })
+                    <span
+                      className={`font-semibold shrink-0 uppercase text-[9px] px-1.5 py-0.5 rounded leading-none mt-0.5 ${
+                        isErr
+                          ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
+                          : isWarn
+                          ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                          : isStage
+                          ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30 font-bold'
+                          : 'text-slate-500 bg-slate-900'
+                      }`}
+                    >
+                      {isStage ? 'STAGE' : log.level || 'info'}
+                    </span>
+
+                    <span
+                      className={`break-all ${
+                        isErr
+                          ? 'text-rose-300 font-medium'
+                          : isWarn
+                          ? 'text-amber-200'
+                          : isStage
+                          ? 'text-blue-300 font-semibold'
+                          : isDockerStep
+                          ? 'text-cyan-300 font-mono'
+                          : 'text-slate-200'
+                      }`}
+                    >
+                      {log.message}
+                    </span>
+                  </div>
+                );
+              })
+            )}
+            <div ref={logsEndRef} />
+          </div>
+
+          {!autoScroll && logs.length > 0 && (
+            <button
+              type="button"
+              onClick={() => {
+                setAutoScroll(true);
+                logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+              }}
+              className="absolute bottom-4 right-5 px-3 py-1.5 rounded-full bg-blue-600 hover:bg-blue-500 text-white text-[11px] font-semibold shadow-lg shadow-blue-600/30 transition-all"
+            >
+              Lompat ke Log Terbaru ↓
+            </button>
           )}
-          <div ref={logsEndRef} />
         </div>
       </div>
 

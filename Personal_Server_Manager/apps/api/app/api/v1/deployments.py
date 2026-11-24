@@ -36,6 +36,7 @@ from apps.api.app.services.pap_client import (
     sync_domain_routing,
 )
 from apps.api.app.services.port_service import validate_or_allocate_port_mappings
+from apps.api.app.websocket.manager import ws_manager
 
 router = APIRouter(prefix="/deployments", tags=["Deployment Center"])
 
@@ -143,11 +144,12 @@ async def create_git_deployment(
     db.refresh(deployment)
 
     # Initial deployment log
+    cache_note = " (No-Cache Clean Build)" if payload.no_cache else ""
     initial_log = DeploymentLog(
         deployment_id=deployment.id,
         sequence=1,
         level="info",
-        message=f"Deployment v{version} triggered via Git ({src.repository_url} @ {payload.branch or src.branch})"
+        message=f"Deployment v{version} triggered via Git ({src.repository_url} @ {payload.branch or src.branch}){cache_note}"
     )
     db.add(initial_log)
     db.commit()
@@ -206,6 +208,7 @@ async def create_git_deployment(
         "image_tag": image_tag,
         "version": version,
         "db_type": project.db_type,
+        "no_cache": bool(payload.no_cache),
         "environment_variables": env_vars,
         "database_config": db_info,
         "git_token": get_stored_token(),
@@ -420,6 +423,7 @@ async def finalize_zip_upload(
         "compose_path": project.source.compose_path if project.source else "docker-compose.yml",
         "port_mappings": project.port_mappings,
         "db_type": project.db_type,
+        "no_cache": False,
         "environment_variables": env_vars,
         "database_config": db_info,
         "git_token": get_stored_token(),
@@ -562,6 +566,7 @@ async def github_webhook_trigger(
         "image_tag": image_tag,
         "version": version,
         "db_type": project.db_type,
+        "no_cache": bool(payload.get("no_cache", False)),
         "environment_variables": env_vars,
         "database_config": db_info,
         "git_token": get_stored_token(),
@@ -618,7 +623,7 @@ def get_deployment(
     )
 
 @router.post("/{deployment_id}/cancel")
-def cancel_deployment(
+async def cancel_deployment(
     deployment_id: str,
     current_user: User = Depends(require_role("owner", "admin", "operator")),
     db: Session = Depends(get_db)
@@ -641,6 +646,15 @@ def cancel_deployment(
             j.finished_at = datetime.now(timezone.utc)
 
     db.commit()
+
+    await ws_manager.broadcast_deployment_log(
+        deployment_id,
+        {
+            "event": "deployment.status",
+            "deployment_id": deployment_id,
+            "status": "cancelled",
+        },
+    )
 
     log_activity(
         db,

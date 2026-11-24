@@ -15,14 +15,29 @@ export function getApiBase(): string {
 }
 
 export function getWsBase(): string {
+  if (typeof window !== 'undefined') {
+    const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const envWs = process.env.NEXT_PUBLIC_WS_URL?.trim();
+    if (envWs) {
+      try {
+        const parsed = new URL(envWs);
+        if (parsed.hostname === window.location.hostname) {
+          return envWs.replace(/\/$/, '');
+        }
+      } catch (_) {}
+    }
+    if (window.location.hostname.endsWith('.tailscale.homelab')) {
+      return `${wsProto}//psm-api.tailscale.homelab`;
+    }
+    if (window.location.hostname.endsWith('.homelab')) {
+      return `${wsProto}//psm-api.homelab`;
+    }
+    return `${wsProto}//${window.location.hostname}:8001`;
+  }
   if (process.env.NEXT_PUBLIC_WS_URL && process.env.NEXT_PUBLIC_WS_URL.trim() !== '') {
     return process.env.NEXT_PUBLIC_WS_URL;
   }
-  if (typeof window !== 'undefined') {
-    const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    return `${wsProto}//${window.location.hostname}:8000`;
-  }
-  return 'ws://localhost:8000';
+  return 'ws://localhost:8001';
 }
 
 export function getAuthToken(): string | null {
@@ -308,8 +323,9 @@ export const api = {
     return res.json();
   },
 
-  async redeployProject(id: string) {
-    const res = await fetchWithAuth(`/api/v1/projects/${id}/redeploy`, {
+  async redeployProject(id: string, noCache = false) {
+    const qs = noCache ? '?no_cache=true' : '';
+    const res = await fetchWithAuth(`/api/v1/projects/${id}/redeploy${qs}`, {
       method: 'POST',
     });
     if (!res.ok) {

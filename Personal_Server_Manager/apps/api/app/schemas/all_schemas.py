@@ -310,6 +310,7 @@ class DeploymentCreateGit(BaseModel):
     port_mappings: Optional[str] = None
     domain: Optional[str] = None
     db_type: Optional[str] = None
+    no_cache: bool = False
     environment_variables: Optional[List[EnvironmentVariableItem]] = None
 
 class DeploymentCreateCompose(BaseModel):
