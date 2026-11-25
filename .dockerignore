@@ -1,0 +1,15 @@
+# Root .dockerignore for Homelab (keeps pap-api build context tiny & fast)
+.git
+.gitignore
+.pytest_cache
+**/__pycache__
+**/*.py[cod]
+**/node_modules
+**/.next
+**/.venv
+**/venv
+storage/
+*.tar.gz
+*.zip
+*.db
+*.log

@@ -934,6 +934,7 @@ class DeploymentEngine:
             **os.environ,
             "DOCKER_BUILDKIT": "1",
             "BUILDKIT_PROGRESS": "plain",
+            "COMPOSE_PARALLEL_LIMIT": "1",
             "GOMAXPROCS": os.getenv("PSM_BUILD_JOBS", "2"),
             "MAKEFLAGS": f"-j{os.getenv('PSM_BUILD_JOBS', '2')}",
             "CARGO_BUILD_JOBS": os.getenv("PSM_BUILD_JOBS", "2"),

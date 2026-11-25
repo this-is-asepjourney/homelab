@@ -19,7 +19,7 @@ fi
 # Mencegah kernel agresif memindahkan memori aplikasi/database ke disk swap
 # (terutama pada server RAM 4-8 GB).
 SYSCTL_FILE="/etc/sysctl.d/99-homelab-performance.conf"
-echo "[1/4] Mengatur kernel sysctl ($SYSCTL_FILE)..."
+echo "[1/5] Mengatur kernel sysctl ($SYSCTL_FILE)..."
 $SUDO tee "$SYSCTL_FILE" >/dev/null <<'EOF'
 # Kurangi kecenderungan swap agar proses aktif (DB, API, SSH) tetap di RAM fisik
 vm.swappiness = 20
@@ -34,7 +34,7 @@ echo "      -> vm.swappiness=20, vm.vfs_cache_pressure=50, dirty_ratio=15 aktif.
 
 # 2. Pastikan Swap minimal 4 GB tersedia sebagai jaring pengaman OOM saat build
 TOTAL_SWAP_MB=$(free -m | awk '/^Swap:/ {print $2}')
-echo "[2/4] Memeriksa kapasitas Swap saat ini: ${TOTAL_SWAP_MB:-0} MB..."
+echo "[2/5] Memeriksa kapasitas Swap saat ini: ${TOTAL_SWAP_MB:-0} MB..."
 if [ "${TOTAL_SWAP_MB:-0}" -lt 3500 ] && [ ! -f /swapfile_homelab ]; then
   echo "      -> Membuat swap tambahan /swapfile_homelab (2 GB) agar aman dari OOM..."
   $SUDO fallocate -l 2G /swapfile_homelab || $SUDO dd if=/dev/zero of=/swapfile_homelab bs=1M count=2048 status=none
@@ -49,16 +49,24 @@ else
   echo "      -> Kapasitas Swap sudah memadai."
 fi
 
-# 3. Bersihkan dangling Docker images & cache build lama (TANPA menyentuh volume!)
-echo "[3/4] Membersihkan dangling images & BuildKit cache usang (data volume AMAN)..."
+# 3. Batasi paralelisme build Docker Compose menjadi 1 image per giliran di .env
+ENV_FILE="$(cd "$(dirname "$0")" && pwd)/.env"
+echo "[3/5] Mengamankan COMPOSE_PARALLEL_LIMIT=1 di $ENV_FILE..."
+touch "$ENV_FILE"
+if ! grep -q "^COMPOSE_PARALLEL_LIMIT=" "$ENV_FILE" 2>/dev/null; then
+  echo "COMPOSE_PARALLEL_LIMIT=1" >> "$ENV_FILE"
+fi
+
+# 4. Bersihkan dangling Docker images & cache build lama (TANPA menyentuh volume!)
+echo "[4/5] Membersihkan dangling images & BuildKit cache usang (data volume AMAN)..."
 if command -v docker >/dev/null 2>&1; then
   docker image prune -f >/dev/null 2>&1 || true
   docker builder prune --keep-storage=2GB -f >/dev/null 2>&1 || true
   echo "      -> Dangling images & cache build berlebih dibersihkan (simpan 2 GB cache terbaru)."
 fi
 
-# 4. Ringkasan kondisi akhir
-echo "[4/4] Status memori & disk saat ini:"
+# 5. Ringkasan kondisi akhir
+echo "[5/5] Status memori & disk saat ini:"
 free -h
 echo ""
 df -h /
