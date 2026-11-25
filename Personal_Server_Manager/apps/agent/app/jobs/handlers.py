@@ -243,19 +243,25 @@ def handle_deployment_rollback(payload: Dict[str, Any], log_cb: Callable) -> Dic
     log_cb("warning", f"[Rollback] Initiating rollback to image: {target_image}...")
     sanitized_name = project_name.lower().replace(" ", "-")
 
-    # Stop current container and run previous image tag with bounded CPU & RAM
+    # Stop current container and restart previous image tag (respecting optional resource limits)
     subprocess.run(["docker", "stop", sanitized_name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     subprocess.run(["docker", "rm", "-f", sanitized_name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    app_mem_limit, app_mem_swap, app_cpus = DeploymentEngine._resolve_app_resource_limits()
     cmd = [
         "docker", "run", "-d",
         "--restart", "unless-stopped",
         "--name", sanitized_name,
-        f"--memory={agent_settings.APP_MEMORY_LIMIT}",
-        f"--memory-swap={agent_settings.APP_MEMORY_SWAP}",
-        f"--cpus={agent_settings.APP_CPUS}",
         "--cpu-shares=512",
-        target_image,
+        "--log-opt", "max-size=10m",
+        "--log-opt", "max-file=3",
     ]
+    if app_mem_limit:
+        cmd.append(f"--memory={app_mem_limit}")
+        if app_mem_swap:
+            cmd.append(f"--memory-swap={app_mem_swap}")
+    if app_cpus is not None:
+        cmd.append(f"--cpus={app_cpus:g}")
+    cmd.append(target_image)
     proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     log_cb("info", proc.stdout.strip() if proc.stdout else "Container restarted with previous release image.")
     return {"success": True, "restored_image": target_image}

@@ -11,21 +11,21 @@ class AgentSettings(BaseSettings):
     AGENT_VERSION: str = "0.1.0"
 
     # Optimized background loop intervals (seconds) to avoid Docker daemon & DB context-switch storms
-    HEARTBEAT_INTERVAL: int = int(os.getenv("HEARTBEAT_INTERVAL", "20"))
+    HEARTBEAT_INTERVAL: int = int(os.getenv("HEARTBEAT_INTERVAL", "15"))
     METRICS_INTERVAL: int = int(os.getenv("METRICS_INTERVAL", "15"))
     CONTAINER_STATS_TTL: int = int(os.getenv("CONTAINER_STATS_TTL", "30"))
     INVENTORY_INTERVAL: int = int(os.getenv("INVENTORY_INTERVAL", "60"))
     POLL_IDLE_INTERVAL: float = float(os.getenv("POLL_IDLE_INTERVAL", "30.0"))
     POLL_DISCONNECTED_INTERVAL: float = float(os.getenv("POLL_DISCONNECTED_INTERVAL", "5.0"))
 
-    # Deployment & Build Resource Guard settings
+    # Deployment & Build Resource Guard settings (blank/0 = no hard container cap)
     BUILD_NICE_LEVEL: int = int(os.getenv("PSM_BUILD_NICE", "15"))
     BUILD_IONICE_CLASS: int = int(os.getenv("PSM_BUILD_IONICE_CLASS", "2"))
     BUILD_IONICE_LEVEL: int = int(os.getenv("PSM_BUILD_IONICE_LEVEL", "7"))
-    NODE_MAX_OLD_SPACE_MB: int = int(os.getenv("PSM_NODE_MAX_OLD_SPACE_MB", "1024"))
-    APP_MEMORY_LIMIT: str = os.getenv("PSM_APP_MEMORY_LIMIT", "512m")
-    APP_MEMORY_SWAP: str = os.getenv("PSM_APP_MEMORY_SWAP", "1024m")
-    APP_CPUS: str = os.getenv("PSM_APP_CPUS", "0.85")
+    NODE_MAX_OLD_SPACE_MB: int = int(os.getenv("PSM_NODE_MAX_OLD_SPACE_MB", "1536"))
+    APP_MEMORY_LIMIT: str = os.getenv("PSM_APP_MEMORY_LIMIT", "")
+    APP_MEMORY_SWAP: str = os.getenv("PSM_APP_MEMORY_SWAP", "")
+    APP_CPUS: str = os.getenv("PSM_APP_CPUS", "")
     MAX_KEPT_RELEASES: int = int(os.getenv("PSM_MAX_KEPT_RELEASES", "3"))
 
     # Workspace paths

@@ -87,7 +87,7 @@ class Settings(BaseSettings):
     RELEASE_DIR: str = os.getenv("RELEASE_DIR", "./storage/releases")
 
     # Agent Heartbeat & Offline threshold (seconds)
-    HEARTBEAT_TIMEOUT_SECONDS: int = 45
+    HEARTBEAT_TIMEOUT_SECONDS: int = int(os.getenv("HEARTBEAT_TIMEOUT_SECONDS", "90"))
 
     model_config = {
         "env_file": (".env.example", ".env"),

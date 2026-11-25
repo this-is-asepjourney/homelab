@@ -1,4 +1,4 @@
 {
-  "prometheus_url": "http://host.docker.internal:9001",
-  "updated_at": "2026-11-20T05:31:05.959528+00:00"
+  "prometheus_url": "http://prometheus:9090",
+  "updated_at": "2026-11-25T16:40:00+00:00"
 }

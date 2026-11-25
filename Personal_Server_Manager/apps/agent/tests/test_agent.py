@@ -566,6 +566,27 @@ def test_serialized_deployment_guard_and_build_throttling(tmp_path, monkeypatch)
     assert "RUN pnpm install --frozen-lockfile" in cleaned_bk
 
 
+def test_resolve_app_resource_limits(monkeypatch):
+    from apps.agent.app.core.config import agent_settings
+
+    # Unbounded defaults / explicit unlimited values return (None, None, None)
+    for val in ("", "0", "none", "unlimited", "off"):
+        monkeypatch.setattr(agent_settings, "APP_MEMORY_LIMIT", val)
+        monkeypatch.setattr(agent_settings, "APP_MEMORY_SWAP", "1024m")
+        monkeypatch.setattr(agent_settings, "APP_CPUS", val)
+        assert DeploymentEngine._resolve_app_resource_limits() == (None, None, None)
+
+    # Configured limits are parsed and swap is preserved only alongside memory
+    monkeypatch.setattr(agent_settings, "APP_MEMORY_LIMIT", "768m")
+    monkeypatch.setattr(agent_settings, "APP_MEMORY_SWAP", "1536m")
+    monkeypatch.setattr(agent_settings, "APP_CPUS", "1.5")
+    assert DeploymentEngine._resolve_app_resource_limits() == ("768m", "1536m", 1.5)
+
+    monkeypatch.setattr(agent_settings, "APP_MEMORY_SWAP", "0")
+    monkeypatch.setattr(agent_settings, "APP_CPUS", "invalid")
+    assert DeploymentEngine._resolve_app_resource_limits() == ("768m", None, None)
+
+
 
 
 

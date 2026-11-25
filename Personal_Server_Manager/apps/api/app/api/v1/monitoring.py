@@ -57,13 +57,17 @@ def _get_live_or_cached_telemetry(server_id: str) -> Dict[str, Any]:
 
 
 def load_prometheus_config() -> Dict[str, Any]:
-    default_url = os.getenv("PROMETHEUS_URL", "http://host.docker.internal:9001")
+    default_url = os.getenv("PROMETHEUS_URL", "http://prometheus:9090").strip().rstrip("/")
     try:
         if os.path.exists(PROMETHEUS_CONFIG_FILE):
             with open(PROMETHEUS_CONFIG_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                if data.get("prometheus_url"):
-                    return data
+                saved_url = (data.get("prometheus_url") or "").strip().rstrip("/")
+                if saved_url:
+                    # Prefer explicit non-9001 env URL over stale legacy Snap :9001 config
+                    if saved_url.endswith(":9001") and default_url and not default_url.endswith(":9001"):
+                        return {"prometheus_url": default_url}
+                    return {"prometheus_url": saved_url}
     except Exception:
         pass
     return {"prometheus_url": default_url}
@@ -85,20 +89,21 @@ def save_prometheus_config(url: str) -> Dict[str, Any]:
 
 
 def probe_prometheus_instance(configured_url: str) -> Dict[str, Any]:
-    """Probe Prometheus HTTP API at configured URL and common local gateway candidates."""
+    """Probe Prometheus HTTP API at configured URL and common homelab/Docker candidates."""
+    env_url = os.getenv("PROMETHEUS_URL", "http://prometheus:9090").strip().rstrip("/")
     candidates = [configured_url.rstrip("/")]
     for fallback in [
+        env_url,
+        "http://prometheus:9090",
+        "http://host.docker.internal:9090",
+        "http://172.17.0.1:9090",
+        "http://127.0.0.1:9090",
         "http://host.docker.internal:9001",
-        "http://172.17.0.1:9001",
-        "http://127.0.0.1:9001",
-        "http://localhost:9001",
-        "http://192.168.25.101:9001",
-        "http://100.106.63.90:9001",
     ]:
-        if fallback not in candidates:
+        if fallback and fallback not in candidates:
             candidates.append(fallback)
 
-    last_error = "Connection refused or Prometheus Snap not reachable on port 9001"
+    last_error = "Connection refused or Prometheus not reachable on configured URL"
     for base_url in candidates:
         if not base_url.startswith("http"):
             continue
@@ -287,7 +292,7 @@ def get_monitoring_overview(
                 "id": f"alert-offline-{s.id}",
                 "level": "warning",
                 "title": f"Server {s.name} is offline",
-                "description": "No heartbeat received in the last 45 seconds",
+                "description": f"No heartbeat received in the last {settings.HEARTBEAT_TIMEOUT_SECONDS} seconds",
                 "server_id": s.id,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             })

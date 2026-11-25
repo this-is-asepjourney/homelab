@@ -1673,6 +1673,29 @@ class DeploymentEngine:
         return False, ""
 
     @staticmethod
+    def _resolve_app_resource_limits() -> Tuple[Optional[str], Optional[str], Optional[float]]:
+        """Return optional (mem_limit, memswap_limit, cpus) for deployed app containers, or None when unbounded."""
+        unset_tokens = {"", "0", "none", "unlimited", "off", "false"}
+        raw_mem = str(getattr(agent_settings, "APP_MEMORY_LIMIT", "") or "").strip()
+        raw_swap = str(getattr(agent_settings, "APP_MEMORY_SWAP", "") or "").strip()
+        raw_cpus = str(getattr(agent_settings, "APP_CPUS", "") or "").strip()
+
+        mem_limit = None if raw_mem.lower() in unset_tokens else raw_mem
+        # Docker rejects --memory-swap when --memory is not set
+        mem_swap = None if (not mem_limit or raw_swap.lower() in unset_tokens) else raw_swap
+
+        cpus: Optional[float] = None
+        if raw_cpus.lower() not in unset_tokens:
+            try:
+                parsed = float(raw_cpus)
+                if parsed > 0:
+                    cpus = parsed
+            except ValueError:
+                cpus = None
+
+        return mem_limit, mem_swap, cpus
+
+    @staticmethod
     def _verify_container_readiness(
         docker_bin: str,
         sanitized_name: str,
@@ -1902,9 +1925,7 @@ class DeploymentEngine:
             if target_network:
                 log_callback("info", f"[PostgreSQL] Attaching container '{sanitized_name}' to database network '{target_network}'")
 
-            app_mem_limit = getattr(agent_settings, "APP_MEMORY_LIMIT", "512m") or "512m"
-            app_mem_swap = getattr(agent_settings, "APP_MEMORY_SWAP", "1024m") or "1024m"
-            app_cpus = str(getattr(agent_settings, "APP_CPUS", "0.85") or "0.85")
+            app_mem_limit, app_mem_swap, app_cpus = DeploymentEngine._resolve_app_resource_limits()
 
             for attempt in range(1, MAX_PORT_RETRIES + 1):
                 attempt_port_args: List[str] = []
@@ -1915,14 +1936,17 @@ class DeploymentEngine:
                     docker_bin, "run", "-d",
                     "--restart", "unless-stopped",
                     "--name", sanitized_name,
-                    f"--memory={app_mem_limit}",
-                    f"--memory-swap={app_mem_swap}",
-                    f"--cpus={app_cpus}",
                     "--cpu-shares=512",
                     "--log-opt", "max-size=10m",
                     "--log-opt", "max-file=3",
                     "--add-host=host.docker.internal:host-gateway",
                 ]
+                if app_mem_limit:
+                    run_cmd.append(f"--memory={app_mem_limit}")
+                    if app_mem_swap:
+                        run_cmd.append(f"--memory-swap={app_mem_swap}")
+                if app_cpus is not None:
+                    run_cmd.append(f"--cpus={app_cpus:g}")
                 if target_network:
                     run_cmd.extend(["--network", target_network])
                 if has_env_file:
@@ -2036,6 +2060,8 @@ class DeploymentEngine:
             if target_network:
                 log_callback("info", f"[PostgreSQL] Attaching container '{sanitized_name}' to database network '{target_network}'")
 
+            app_mem_limit, app_mem_swap, app_cpus = DeploymentEngine._resolve_app_resource_limits()
+
             for attempt in range(1, MAX_PORT_RETRIES + 1):
                 attempt_ports_map = {f"{cp}/tcp": hp for hp, cp in current_mappings}
                 log_callback("info", f"[Docker-SDK] Launching container '{sanitized_name}'...")
@@ -2044,14 +2070,17 @@ class DeploymentEngine:
                     "name": sanitized_name,
                     "detach": True,
                     "restart_policy": {"Name": "unless-stopped"},
-                    "mem_limit": getattr(agent_settings, "APP_MEMORY_LIMIT", "512m") or "512m",
-                    "memswap_limit": getattr(agent_settings, "APP_MEMORY_SWAP", "1024m") or "1024m",
-                    "nano_cpus": int(float(getattr(agent_settings, "APP_CPUS", "0.85") or 0.85) * 1_000_000_000),
                     "cpu_shares": 512,
                     "ports": attempt_ports_map if attempt_ports_map else None,
                     "environment": env_dict if env_dict else None,
                     "extra_hosts": {"host.docker.internal": "host-gateway"},
                 }
+                if app_mem_limit:
+                    run_kwargs["mem_limit"] = app_mem_limit
+                    if app_mem_swap:
+                        run_kwargs["memswap_limit"] = app_mem_swap
+                if app_cpus is not None:
+                    run_kwargs["nano_cpus"] = int(app_cpus * 1_000_000_000)
                 if target_network:
                     run_kwargs["network"] = target_network
 
