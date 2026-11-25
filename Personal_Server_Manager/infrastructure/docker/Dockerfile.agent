@@ -2,12 +2,14 @@ FROM python:3.13-slim
 
 WORKDIR /app
 
-# Install system dependencies, Git, and official Docker CE CLI & Compose Plugin
+# Install system dependencies, Git, CPU/IO scheduler tools (nice/ionice), and official Docker CE CLI & Compose Plugin
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
     gnupg \
     git \
+    util-linux \
+    procps \
     && install -m 0755 -d /etc/apt/keyrings \
     && curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc \
     && chmod a+r /etc/apt/keyrings/docker.asc \

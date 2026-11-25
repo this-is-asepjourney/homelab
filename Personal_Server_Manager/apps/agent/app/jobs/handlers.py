@@ -243,10 +243,19 @@ def handle_deployment_rollback(payload: Dict[str, Any], log_cb: Callable) -> Dic
     log_cb("warning", f"[Rollback] Initiating rollback to image: {target_image}...")
     sanitized_name = project_name.lower().replace(" ", "-")
 
-    # Stop current container and run previous image tag
+    # Stop current container and run previous image tag with bounded CPU & RAM
     subprocess.run(["docker", "stop", sanitized_name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     subprocess.run(["docker", "rm", "-f", sanitized_name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    cmd = ["docker", "run", "-d", "--restart", "unless-stopped", "--name", sanitized_name, target_image]
+    cmd = [
+        "docker", "run", "-d",
+        "--restart", "unless-stopped",
+        "--name", sanitized_name,
+        f"--memory={agent_settings.APP_MEMORY_LIMIT}",
+        f"--memory-swap={agent_settings.APP_MEMORY_SWAP}",
+        f"--cpus={agent_settings.APP_CPUS}",
+        "--cpu-shares=512",
+        target_image,
+    ]
     proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     log_cb("info", proc.stdout.strip() if proc.stdout else "Container restarted with previous release image.")
     return {"success": True, "restored_image": target_image}

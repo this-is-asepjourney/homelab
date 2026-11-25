@@ -94,6 +94,7 @@ COPY . .
 
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV NODE_ENV=production
+ENV NODE_OPTIONS="--max-old-space-size=1024"
 
 RUN \\
   if [ -f pnpm-lock.yaml ]; then corepack enable pnpm && pnpm run build; \\
@@ -159,6 +160,7 @@ RUN \\
   fi
 
 COPY . .
+ENV NODE_OPTIONS="--max-old-space-size=1024"
 RUN \\
   if [ -f pnpm-lock.yaml ]; then corepack enable pnpm && pnpm run build; \\
   elif [ -f yarn.lock ]; then yarn build; \\
@@ -391,7 +393,7 @@ RUN apk add --no-cache \\
     oniguruma-dev \\
     libxml2-dev
 
-RUN docker-php-ext-install \\
+RUN docker-php-ext-install -j2 \\
     pdo \\
     pdo_mysql \\
     pdo_pgsql \\
@@ -404,10 +406,16 @@ RUN docker-php-ext-install \\
 
 RUN curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
 
+# Cache Composer vendor layer before copying full application source
+COPY composer.json composer.lock* ./
+RUN if [ -f composer.json ]; then \\
+      composer install --no-dev --no-scripts --no-autoloader --no-interaction --prefer-dist --ignore-platform-reqs || true; \\
+    fi
+
 COPY . .
 
 RUN if [ -f composer.json ]; then \\
-      composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader --ignore-platform-reqs || true; \\
+      composer dump-autoload --optimize --no-dev --no-interaction || composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader --ignore-platform-reqs || true; \\
     fi
 
 RUN mkdir -p storage bootstrap/cache && chmod -R 777 storage bootstrap/cache || true

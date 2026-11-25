@@ -467,6 +467,78 @@ def test_realtime_log_streamer_batches_and_flushes(monkeypatch):
     assert len(sent_batches) >= 2
 
 
+def test_serialized_deployment_guard_and_build_throttling(tmp_path, monkeypatch):
+    import shutil
+    import threading
+    import time
+    from apps.agent.app.jobs.executor import is_deployment_active, serialized_deployment_guard
+    from apps.agent.app.docker.client import DockerManager
+
+    # 1. Serialized deployment guard prevents concurrent builds and emits queue stage notice
+    assert is_deployment_active() is False
+    order = []
+    logs_second = []
+    first_entered = threading.Event()
+    release_first = threading.Event()
+
+    def worker_one():
+        with serialized_deployment_guard():
+            assert is_deployment_active() is True
+            order.append("one_start")
+            first_entered.set()
+            release_first.wait(timeout=2.0)
+            order.append("one_end")
+
+    def worker_two():
+        first_entered.wait(timeout=2.0)
+        with serialized_deployment_guard(lambda lvl, msg: logs_second.append((lvl, msg))):
+            order.append("two_start")
+
+    t1 = threading.Thread(target=worker_one)
+    t2 = threading.Thread(target=worker_two)
+    t1.start()
+    t2.start()
+    first_entered.wait(timeout=2.0)
+    time.sleep(0.08)
+
+    # While deployment is active, DockerManager.get_all_container_stats skips live `docker stats` CLI call
+    dm = DockerManager()
+    dm._stats_cache = [{"name": "cached-app", "cpu_percent": "1.2"}]
+    assert dm.get_all_container_stats(force=False) == [{"name": "cached-app", "cpu_percent": "1.2"}]
+
+    release_first.set()
+    t1.join(timeout=2.0)
+    t2.join(timeout=2.0)
+
+    assert is_deployment_active() is False
+    assert order == ["one_start", "one_end", "two_start"]
+    assert any("[STAGE:QUEUE]" in msg for _, msg in logs_second)
+
+    # 2. Low-priority CPU/IO command wrapper adds ionice & nice when present on Linux
+    monkeypatch.setattr(
+        shutil,
+        "which",
+        lambda name: f"/usr/bin/{name}" if name in ("nice", "ionice") else None,
+    )
+    wrapped = DeploymentEngine._wrap_low_priority_cmd(["docker", "build", "."])
+    assert wrapped[:6] == ["/usr/bin/ionice", "-c", "2", "-n", "7", "/usr/bin/nice"]
+    assert wrapped[-3:] == ["docker", "build", "."]
+
+    # 3. Custom Node.js Dockerfile gets NODE_OPTIONS heap cap injected automatically
+    custom_df = tmp_path / "Dockerfile"
+    custom_df.write_text("FROM node:20-alpine\nCOPY . .\nRUN npm run build\nCMD [\"npm\", \"start\"]\n")
+    prep_logs = []
+    DeploymentEngine.prepare_dockerfile_environment(
+        workspace_dir=str(tmp_path),
+        dockerfile_path="Dockerfile",
+        log_callback=lambda lvl, msg: prep_logs.append((lvl, msg)),
+    )
+    patched = custom_df.read_text()
+    assert 'ENV NODE_OPTIONS="--max-old-space-size=' in patched
+    assert patched.index("NODE_OPTIONS") < patched.index("RUN npm run build")
+
+
+
 
 
 

@@ -1,6 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  output: 'standalone',
   async rewrites() {
     // Rewrites are resolved at build time; inside Docker the API is reachable as http://api:8000
     const apiUrl = process.env.INTERNAL_API_URL || 'http://api:8000';

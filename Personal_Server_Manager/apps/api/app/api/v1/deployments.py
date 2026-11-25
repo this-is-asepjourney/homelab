@@ -5,6 +5,7 @@ import zipfile
 from datetime import datetime, timezone
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Request
+from fastapi.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session
 from apps.api.app.database.session import get_db
 from apps.api.app.core.config import settings
@@ -189,7 +190,7 @@ async def create_git_deployment(
     try:
         eff_domain = resolve_effective_domain(project.domain, project.name)
         hp = extract_host_port(project.port_mappings)
-        sync_domain_routing(domain=eff_domain, target_port=hp, project_name=project.name)
+        await run_in_threadpool(sync_domain_routing, eff_domain, hp, project.name)
     except Exception:
         pass
 
@@ -407,7 +408,7 @@ async def finalize_zip_upload(
     try:
         eff_domain = resolve_effective_domain(project.domain, project.name)
         hp = extract_host_port(project.port_mappings)
-        sync_domain_routing(domain=eff_domain, target_port=hp, project_name=project.name)
+        await run_in_threadpool(sync_domain_routing, eff_domain, hp, project.name)
     except Exception:
         pass
 
@@ -548,7 +549,7 @@ async def github_webhook_trigger(
     try:
         eff_domain = resolve_effective_domain(project.domain, project.name)
         hp = extract_host_port(project.port_mappings)
-        sync_domain_routing(domain=eff_domain, target_port=hp, project_name=project.name)
+        await run_in_threadpool(sync_domain_routing, eff_domain, hp, project.name)
     except Exception:
         pass
 

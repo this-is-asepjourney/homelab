@@ -2,11 +2,13 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
+ENV NODE_OPTIONS="--max-old-space-size=1024"
 
 COPY apps/web/package*.json ./
-RUN npm install
+RUN npm ci 2>/dev/null || npm install --no-audit --no-fund
 
 COPY apps/web/ ./
+RUN mkdir -p /app/public
 # Baked into Next.js rewrites at build time (browser -> :3005/api/v1 -> api:8000)
 ARG INTERNAL_API_URL=http://api:8000
 ENV INTERNAL_API_URL=${INTERNAL_API_URL}
@@ -16,10 +18,18 @@ FROM node:20-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
+ENV PORT=3005
+ENV HOSTNAME="0.0.0.0"
 
-RUN apk add --no-cache tini
-COPY --from=builder /app ./
+RUN apk add --no-cache tini && \
+    addgroup --system --gid 1001 nodejs && \
+    adduser --system --uid 1001 nextjs
 
+COPY --from=builder --chown=nextjs:nodejs /app/public ./public
+COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+
+USER nextjs
 EXPOSE 3005
 ENTRYPOINT ["/sbin/tini", "--"]
-CMD ["npm", "start"]
+CMD ["node", "server.js"]

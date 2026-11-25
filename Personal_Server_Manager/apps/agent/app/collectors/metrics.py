@@ -10,6 +10,10 @@ _last_net_io = None
 _last_net_time = None
 _last_disk_io = None
 _last_disk_time = None
+_cached_ports_conns: Dict[str, Any] = {"listening_ports": [], "connection_stats": {"established": 0, "listen": 0, "time_wait": 0, "close_wait": 0, "total": 0}}
+_cached_ports_time: float = 0.0
+_cached_interfaces: List[Dict[str, Any]] = []
+_cached_interfaces_time: float = 0.0
 
 
 def get_system_info() -> Dict[str, Any]:
@@ -164,8 +168,10 @@ def collect_listening_ports_and_connections() -> Dict[str, Any]:
 
 def get_metrics_snapshot() -> Dict[str, Any]:
     global _last_net_io, _last_net_time, _last_disk_io, _last_disk_time
+    global _cached_ports_conns, _cached_ports_time, _cached_interfaces, _cached_interfaces_time
 
     now = time.time()
+    mono_now = time.monotonic()
 
     # CPU
     cpu_percent = psutil.cpu_percent(interval=None)
@@ -248,9 +254,16 @@ def get_metrics_snapshot() -> Dict[str, Any]:
     _last_net_io = net_io
     _last_net_time = now
 
-    # Network interfaces & listening ports
-    net_interfaces = collect_network_interfaces()
-    ports_and_conns = collect_listening_ports_and_connections()
+    # Network interfaces & listening ports (cached for 25s to reduce /proc/net scan overhead)
+    if not _cached_interfaces or (mono_now - _cached_interfaces_time) >= 25.0:
+        _cached_interfaces = collect_network_interfaces()
+        _cached_interfaces_time = mono_now
+    net_interfaces = _cached_interfaces
+
+    if not _cached_ports_time or (mono_now - _cached_ports_time) >= 25.0:
+        _cached_ports_conns = collect_listening_ports_and_connections()
+        _cached_ports_time = mono_now
+    ports_and_conns = _cached_ports_conns
 
     # Uptime
     boot_time = psutil.boot_time()

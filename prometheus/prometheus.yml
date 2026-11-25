@@ -26,6 +26,6 @@ scrape_configs:
       - targets: ["psm-api:8000"]
 
   - job_name: "telegraf"
-    scrape_interval: 5s
+    scrape_interval: 15s
     static_configs:
       - targets: ["telegraf:9273"]

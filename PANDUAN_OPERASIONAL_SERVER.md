@@ -100,11 +100,15 @@ docker compose stop nextcloud
 cd ~/homelab
 git pull origin main
 
-# Rebuild hanya layanan backend yang berubah (cepat)
+# (Direkomendasikan 1x di awal) Optimasi kernel swap/cache host Ubuntu & bersihkan build cache lama
+chmod +x optimize_homelab_host.sh
+./optimize_homelab_host.sh
+
+# Rebuild layanan backend & agent dengan Resource Guard baru
 docker compose up -d --build pap-api psm-api psm-agent
 
-# Jika mengubah UI Next.js (psm-web), build memakan waktu lebih lama -> jalankan via nohup
-nohup docker compose up -d --build psm-web > /tmp/build-psm-web.log 2>&1 &
+# Jika mengubah UI Next.js (psm-web, sudah mendukung standalone hemat RAM), jalankan dengan nice/nohup
+nohup nice -n 15 ionice -c 2 -n 7 docker compose up -d --build psm-web > /tmp/build-psm-web.log 2>&1 &
 tail -f /tmp/build-psm-web.log
 ```
 

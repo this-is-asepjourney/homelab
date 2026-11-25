@@ -1,19 +1,67 @@
 import threading
 import time
 import httpx
-from typing import Dict, Any, List
+from contextlib import contextmanager
+from typing import Callable, Dict, Any, List, Optional, Set
 from apps.agent.app.jobs.handlers import HANDLERS, ALLOWED_JOB_TYPES
 from apps.agent.app.core.config import agent_settings
 
 
+DEPLOYMENT_JOB_TYPES: Set[str] = {
+    "deployment.git",
+    "deployment.zip",
+    "deployment.compose",
+    "deployment.rollback",
+}
+
+_deployment_build_lock = threading.Lock()
+_state_guard = threading.Lock()
+_active_deployments_count: int = 0
+_active_job_ids: Set[str] = set()
+
+
+def is_deployment_active() -> bool:
+    """Return True while at least one deployment/build job is actively running on this agent."""
+    with _state_guard:
+        return _active_deployments_count > 0
+
+
+@contextmanager
+def serialized_deployment_guard(log_callback: Optional[Callable[[str, str], None]] = None):
+    """
+    Ensure at most ONE deployment/build executes at a time on the server,
+    preventing parallel Docker builds from exhausting CPU, RAM, and disk I/O.
+    """
+    global _active_deployments_count
+    acquired_immediately = _deployment_build_lock.acquire(blocking=False)
+    if not acquired_immediately:
+        if log_callback:
+            log_callback(
+                "info",
+                "[STAGE:QUEUE] Menunggu giliran: Deployment lain sedang berjalan. Antrean otomatis menjaga agar CPU & RAM server tetap stabil...",
+            )
+        _deployment_build_lock.acquire()
+        if log_callback:
+            log_callback("info", "[STAGE:QUEUE] Giliran build diperoleh — memulai eksekusi deployment.")
+
+    with _state_guard:
+        _active_deployments_count += 1
+    try:
+        yield
+    finally:
+        with _state_guard:
+            _active_deployments_count = max(0, _active_deployments_count - 1)
+        _deployment_build_lock.release()
+
+
 class _RealtimeLogStreamer:
-    """Thread-safe keep-alive log streamer with smart micro-batching and immediate flush on milestones/errors."""
+    """Thread-safe keep-alive log streamer with smart batching to minimize API/DB I/O storms during builds."""
 
     def __init__(
         self,
         job_id: str,
-        flush_interval: float = 0.12,
-        max_batch_size: int = 12,
+        flush_interval: float = 0.6,
+        max_batch_size: int = 40,
     ):
         self.job_id = job_id
         self.flush_interval = flush_interval
@@ -27,7 +75,7 @@ class _RealtimeLogStreamer:
         self._buffer: List[Dict[str, Any]] = []
         self._stop_event = threading.Event()
         self._flush_event = threading.Event()
-        self._client = httpx.Client(timeout=6)
+        self._client = httpx.Client(timeout=8)
         self._worker = threading.Thread(target=self._run_loop, daemon=True)
         self._worker.start()
 
@@ -96,6 +144,13 @@ class JobExecutor:
         if job_type not in ALLOWED_JOB_TYPES or job_type not in HANDLERS:
             raise ValueError(f"Job type '{job_type}' is not allowed or not recognized")
 
+        # Prevent duplicate execution if WebSocket dispatch and fallback HTTP poller overlap
+        if job_id:
+            with _state_guard:
+                if job_id in _active_job_ids:
+                    return
+                _active_job_ids.add(job_id)
+
         start_time = time.time()
         log_sequence = 0
         seq_lock = threading.Lock()
@@ -115,13 +170,20 @@ class JobExecutor:
         output = {}
 
         try:
-            output = handler(payload, log_callback)
+            if job_type in DEPLOYMENT_JOB_TYPES:
+                with serialized_deployment_guard(log_callback):
+                    output = handler(payload, log_callback)
+            else:
+                output = handler(payload, log_callback)
         except Exception as e:
             status = "failed"
             err_msg = str(e)
             log_callback("error", f"Job failed: {err_msg}")
         finally:
             streamer.close()
+            if job_id:
+                with _state_guard:
+                    _active_job_ids.discard(job_id)
 
         duration = int(time.time() - start_time)
         JobExecutor.report_complete(job_id, status, output, err_msg, duration)

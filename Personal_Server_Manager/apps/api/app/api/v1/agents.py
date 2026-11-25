@@ -1,8 +1,12 @@
 import json
-from datetime import datetime, timezone
-from typing import List, Optional
+import os
+import time
+from datetime import datetime, timezone, timedelta
+from typing import List, Optional, Dict, Any, Tuple
 from fastapi import APIRouter, Depends, HTTPException, status, WebSocket, WebSocketDisconnect, Header
+from fastapi.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session
+import apps.api.app.database.session as db_session
 from apps.api.app.database.session import get_db, SessionLocal
 from apps.api.app.core.security import hash_token
 from apps.api.app.core.dependencies import get_current_agent, resolve_server
@@ -34,6 +38,77 @@ router = APIRouter(prefix="/agents", tags=["Agent"])
 
 # In-memory cache of the most recent extended telemetry report per server
 LATEST_TELEMETRY: dict[str, dict] = {}
+_LAST_METRICS_PRUNE_MONO: float = 0.0
+_METRICS_PRUNE_INTERVAL_SEC: float = 3600.0
+
+
+def _persist_metric_and_prune_sync(payload: MetricsReportRequest) -> Optional[Tuple[str, str, datetime]]:
+    """Persist server metric off the event loop and periodically prune expired rows."""
+    global _LAST_METRICS_PRUNE_MONO
+    db = db_session.SessionLocal()
+    try:
+        server = resolve_server(db, payload.server_id)
+        if not server:
+            return None
+
+        now = datetime.now(timezone.utc)
+        server.last_seen = now
+        server.status = "online"
+
+        metric = ServerMetric(
+            server_id=server.id,
+            cpu_usage=payload.cpu_usage,
+            memory_usage=payload.memory_usage,
+            memory_used_bytes=payload.memory_used_bytes,
+            memory_total_bytes=payload.memory_total_bytes,
+            disk_usage=payload.disk_usage,
+            disk_used_bytes=payload.disk_used_bytes,
+            disk_total_bytes=payload.disk_total_bytes,
+            network_rx=payload.network_rx_bytes_per_sec,
+            network_tx=payload.network_tx_bytes_per_sec,
+            uptime=payload.uptime_seconds,
+            recorded_at=now,
+        )
+        db.add(metric)
+
+        # Hourly retention cleanup so `server_metrics` never bloats PostgreSQL/disk
+        mono_now = time.monotonic()
+        if (mono_now - _LAST_METRICS_PRUNE_MONO) >= _METRICS_PRUNE_INTERVAL_SEC:
+            retention_hours = max(6, int(os.getenv("METRICS_RETENTION_HOURS", "48")))
+            cutoff = now - timedelta(hours=retention_hours)
+            db.query(ServerMetric).filter(ServerMetric.recorded_at < cutoff).delete(synchronize_session=False)
+            _LAST_METRICS_PRUNE_MONO = mono_now
+
+        db.commit()
+        return server.id, server.name, now
+    finally:
+        db.close()
+
+
+def _persist_job_logs_sync(job_id: str, server_id: str, logs: List[Any], now: datetime) -> Optional[str]:
+    """Batch-insert deployment logs off the asyncio event loop."""
+    db = db_session.SessionLocal()
+    try:
+        job = db.query(Job).filter(Job.id == job_id, Job.server_id == server_id).first()
+        if not job or not job.deployment_id:
+            return None
+        deployment_id = job.deployment_id
+        records = [
+            DeploymentLog(
+                deployment_id=deployment_id,
+                sequence=item.get("sequence", 0),
+                level=item.get("level", "info"),
+                message=item.get("message", ""),
+                created_at=now,
+            )
+            for item in logs
+        ]
+        if records:
+            db.add_all(records)
+            db.commit()
+        return deployment_id
+    finally:
+        db.close()
 
 @router.post("/register")
 def register_agent(payload: AgentRegisterRequest, db: Session = Depends(get_db)):
@@ -136,31 +211,11 @@ def agent_heartbeat(payload: HeartbeatRequest, db: Session = Depends(get_db)):
     return {"status": "ok", "server_id": server.id}
 
 @router.post("/metrics")
-async def report_metrics(payload: MetricsReportRequest, db: Session = Depends(get_db)):
-    server = resolve_server(db, payload.server_id)
-    if not server:
+async def report_metrics(payload: MetricsReportRequest):
+    persisted = await run_in_threadpool(_persist_metric_and_prune_sync, payload)
+    if not persisted:
         raise HTTPException(status_code=404, detail="Server not found")
-
-    now = datetime.now(timezone.utc)
-    server.last_seen = now
-    server.status = "online"
-
-    metric = ServerMetric(
-        server_id=server.id,
-        cpu_usage=payload.cpu_usage,
-        memory_usage=payload.memory_usage,
-        memory_used_bytes=payload.memory_used_bytes,
-        memory_total_bytes=payload.memory_total_bytes,
-        disk_usage=payload.disk_usage,
-        disk_used_bytes=payload.disk_used_bytes,
-        disk_total_bytes=payload.disk_total_bytes,
-        network_rx=payload.network_rx_bytes_per_sec,
-        network_tx=payload.network_tx_bytes_per_sec,
-        uptime=payload.uptime_seconds,
-        recorded_at=now
-    )
-    db.add(metric)
-    db.commit()
+    resolved_server_id, resolved_server_name, now = persisted
 
     telemetry_snapshot = {
         "cpu_usage": payload.cpu_usage,
@@ -197,32 +252,34 @@ async def report_metrics(payload: MetricsReportRequest, db: Session = Depends(ge
         "container_stats": payload.container_stats or [],
         "recorded_at": now.isoformat()
     }
-    LATEST_TELEMETRY[server.id] = telemetry_snapshot
+    LATEST_TELEMETRY[resolved_server_id] = telemetry_snapshot
 
-    # Broadcast to WebSocket listeners
-    event_data = {
-        "event": "server.metrics.updated",
-        "server_id": server.id,
-        "data": telemetry_snapshot
-    }
-    await ws_manager.broadcast_server_event(server.id, event_data)
+    # Broadcast to WebSocket listeners only when browser clients are subscribed
+    if resolved_server_id in ws_manager.server_listeners:
+        event_data = {
+            "event": "server.metrics.updated",
+            "server_id": resolved_server_id,
+            "data": telemetry_snapshot
+        }
+        await ws_manager.broadcast_server_event(resolved_server_id, event_data)
 
-    # Evaluate metrics against alerting thresholds (Discord/Telegram)
+    # Evaluate metrics against alerting thresholds (Discord/Telegram) off the event loop
     try:
         from apps.api.app.services.alert_service import check_metrics_and_alert
-        check_metrics_and_alert(
-            server_id=server.id,
-            server_name=server.name,
-            metrics={
+        await run_in_threadpool(
+            check_metrics_and_alert,
+            resolved_server_id,
+            resolved_server_name,
+            {
                 "cpu_usage": payload.cpu_usage,
                 "memory_usage": payload.memory_usage,
-                "disk_usage": payload.disk_usage
-            }
+                "disk_usage": payload.disk_usage,
+            },
         )
     except Exception:
         pass
 
-    return {"status": "recorded", "server_id": server.id}
+    return {"status": "recorded", "server_id": resolved_server_id}
 
 @router.post("/inventory")
 def report_inventory(
@@ -337,36 +394,29 @@ async def receive_job_logs(
     job_id: str,
     payload: JobLogBatchRequest,
     server: Server = Depends(get_current_agent),
-    db: Session = Depends(get_db)
 ):
-    job = db.query(Job).filter(Job.id == job_id, Job.server_id == server.id).first()
-    if not job or not job.deployment_id:
+    now = datetime.now(timezone.utc)
+    deployment_id = await run_in_threadpool(
+        _persist_job_logs_sync, job_id, server.id, payload.logs, now
+    )
+    if not deployment_id:
         return {"status": "skipped_no_deployment"}
 
-    now = datetime.now(timezone.utc)
-    for item in payload.logs:
-        log_record = DeploymentLog(
-            deployment_id=job.deployment_id,
-            sequence=item.get("sequence", 0),
-            level=item.get("level", "info"),
-            message=item.get("message", ""),
-            created_at=now
-        )
-        db.add(log_record)
+    # Broadcast realtime logs only if at least one browser client is watching this deployment
+    if deployment_id in ws_manager.deployment_listeners:
+        now_iso = now.isoformat()
+        for item in payload.logs:
+            await ws_manager.broadcast_deployment_log(
+                deployment_id,
+                {
+                    "deployment_id": deployment_id,
+                    "sequence": item.get("sequence", 0),
+                    "level": item.get("level", "info"),
+                    "message": item.get("message", ""),
+                    "created_at": now_iso,
+                },
+            )
 
-        # Broadcast realtime log to browser clients watching this deployment
-        await ws_manager.broadcast_deployment_log(
-            job.deployment_id,
-            {
-                "deployment_id": job.deployment_id,
-                "sequence": item.get("sequence", 0),
-                "level": item.get("level", "info"),
-                "message": item.get("message", ""),
-                "created_at": now.isoformat()
-            }
-        )
-
-    db.commit()
     return {"status": "logs_stored", "count": len(payload.logs)}
 
 # --- Persistent Agent WebSocket Connection ---

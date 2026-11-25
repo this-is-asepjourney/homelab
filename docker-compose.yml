@@ -1,5 +1,11 @@
 name: homelab
 
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   # =============================================================================
   # CORE DATABASES
@@ -8,6 +14,15 @@ services:
     image: mysql:8.4
     container_name: mysql
     restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 512m
+    cpus: 1.0
+    command:
+      - "--innodb-buffer-pool-size=128M"
+      - "--performance-schema=OFF"
+      - "--max-connections=60"
+      - "--table-open-cache=400"
+      - "--host-cache-size=0"
     environment:
       TZ: ${TZ:-Asia/Jakarta}
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-ganti_root_password_mysql}
@@ -20,9 +35,9 @@ services:
       - mysql_data:/var/lib/mysql
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p${MYSQL_ROOT_PASSWORD:-ganti_root_password_mysql}"]
-      interval: 10s
+      interval: 30s
       timeout: 5s
-      retries: 10
+      retries: 5
     networks:
       - homelab
 
@@ -30,6 +45,19 @@ services:
     image: postgres:16-alpine
     container_name: postgres
     restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 384m
+    cpus: 1.0
+    command:
+      - "postgres"
+      - "-c"
+      - "shared_buffers=128MB"
+      - "-c"
+      - "work_mem=4MB"
+      - "-c"
+      - "maintenance_work_mem=32MB"
+      - "-c"
+      - "max_connections=80"
     environment:
       TZ: ${TZ:-Asia/Jakarta}
       POSTGRES_USER: ${POSTGRES_USER:-fadb}
@@ -42,9 +70,9 @@ services:
       - ./postgres-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-fadb} -d ${POSTGRES_DB:-fadb}"]
-      interval: 10s
+      interval: 30s
       timeout: 5s
-      retries: 10
+      retries: 5
     networks:
       - homelab
 
@@ -52,6 +80,10 @@ services:
     image: redis:7-alpine
     container_name: redis
     restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 128m
+    cpus: 0.50
+    command: ["redis-server", "--maxmemory", "96mb", "--maxmemory-policy", "allkeys-lru", "--save", "60", "100"]
     volumes:
       - redis_data:/data
     networks:
@@ -64,6 +96,9 @@ services:
     image: pgsty/silo:latest
     container_name: minio
     restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 256m
+    cpus: 0.75
     command: server /data --console-address ":9001"
     environment:
       TZ: ${TZ:-Asia/Jakarta}
@@ -77,9 +112,9 @@ services:
       - minio_data:/data
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/minio/health/live || wget -qO- http://127.0.0.1:9000/minio/health/live || mc ready local || mcli ready local"]
-      interval: 10s
+      interval: 30s
       timeout: 5s
-      retries: 10
+      retries: 5
       start_period: 15s
     networks:
       homelab:
@@ -131,6 +166,9 @@ services:
     image: nextcloud:stable
     container_name: nextcloud
     restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 512m
+    cpus: 1.0
     depends_on:
       postgres:
         condition: service_healthy
@@ -146,7 +184,7 @@ services:
       NEXTCLOUD_ADMIN_PASSWORD: ${NEXTCLOUD_ADMIN_PASSWORD:-wokeh123}
       NEXTCLOUD_TRUSTED_DOMAINS: "${SERVER_LAN_IP:-192.168.25.105} ${SERVER_TS_IP:-100.78.113.53} nextcloud.homelab localhost 127.0.0.1"
       REDIS_HOST: redis
-      PHP_MEMORY_LIMIT: 1G
+      PHP_MEMORY_LIMIT: 512M
       PHP_UPLOAD_LIMIT: 2G
     ports:
       - "8080:80"
@@ -159,6 +197,9 @@ services:
     image: eclipse-mosquitto:latest
     container_name: mosquitto
     restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 64m
+    cpus: 0.25
     ports:
       - "1883:1883"
     volumes:
@@ -171,6 +212,9 @@ services:
     image: telegraf:1.29
     container_name: telegraf
     restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 128m
+    cpus: 0.50
     ports:
       - "9273:9273"
     volumes:
@@ -192,10 +236,16 @@ services:
     image: prom/prometheus:latest
     container_name: prometheus
     restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 320m
+    cpus: 0.75
+    environment:
+      GOMEMLIMIT: 220MiB
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.path=/prometheus"
       - "--storage.tsdb.retention.time=30d"
+      - "--storage.tsdb.retention.size=2GB"
     ports:
       - "9090:9090"
     volumes:
@@ -208,6 +258,9 @@ services:
     image: prom/node-exporter:latest
     container_name: node-exporter
     restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 64m
+    cpus: 0.25
     pid: host
     command:
       - "--path.rootfs=/host"
@@ -220,7 +273,16 @@ services:
     image: gcr.io/cadvisor/cadvisor:latest
     container_name: cadvisor
     restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 160m
+    cpus: 0.40
     privileged: true
+    command:
+      - "--housekeeping_interval=30s"
+      - "--max_housekeeping_interval=35s"
+      - "--docker_only=true"
+      - "--store_container_labels=false"
+      - "--disable_metrics=percpu,sched,tcp,udp,disk,diskIO,hugetlb,referenced_memory,cpu_topology,resctrl,process"
     ports:
       - "8081:8080"
     volumes:
@@ -235,6 +297,9 @@ services:
     image: grafana/grafana:latest
     container_name: grafana
     restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 256m
+    cpus: 0.75
     depends_on:
       - prometheus
       - postgres
@@ -261,6 +326,9 @@ services:
     image: louislam/uptime-kuma:1
     container_name: uptime-kuma
     restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 192m
+    cpus: 0.50
     ports:
       - "3001:3001"
     volumes:
@@ -277,6 +345,9 @@ services:
       dockerfile: Personal_Api_Platform/docker/Dockerfile
     container_name: pap-api
     restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 320m
+    cpus: 0.75
     depends_on:
       postgres:
         condition: service_healthy
@@ -324,7 +395,7 @@ services:
       - ./dns:/app/dns
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
-      interval: 15s
+      interval: 30s
       timeout: 5s
       retries: 5
       start_period: 15s
@@ -337,6 +408,9 @@ services:
       dockerfile: infrastructure/docker/Dockerfile.api
     container_name: psm-api
     restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 320m
+    cpus: 0.75
     depends_on:
       postgres:
         condition: service_healthy
@@ -345,6 +419,7 @@ services:
     environment:
       ENVIRONMENT: production
       DEBUG: "false"
+      METRICS_RETENTION_HOURS: "48"
       SERVER_LAN_IP: ${SERVER_LAN_IP:-192.168.25.105}
       SERVER_TS_IP: ${SERVER_TS_IP:-100.78.113.53}
       POSTGRES_DB: psm
@@ -374,9 +449,9 @@ services:
       - psm_storage:/opt/psm
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 10s
+      interval: 30s
       timeout: 5s
-      retries: 10
+      retries: 5
       start_period: 15s
     networks:
       homelab:
@@ -390,11 +465,26 @@ services:
       dockerfile: infrastructure/docker/Dockerfile.agent
     container_name: psm-agent
     restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 256m
+    cpus: 0.75
     environment:
       SERVER_ID: homelab-primary
       AGENT_TOKEN: ${HOMELAB_AGENT_TOKEN:-psm_agent_homelab_default_token}
       CONTROL_PLANE_URL: http://psm-api:8000
       PSM_BASE_DIR: /opt/psm
+      HEARTBEAT_INTERVAL: "20"
+      METRICS_INTERVAL: "15"
+      CONTAINER_STATS_TTL: "30"
+      INVENTORY_INTERVAL: "60"
+      PSM_BUILD_NICE: "15"
+      PSM_BUILD_IONICE_CLASS: "2"
+      PSM_BUILD_IONICE_LEVEL: "7"
+      PSM_NODE_MAX_OLD_SPACE_MB: "1024"
+      PSM_APP_MEMORY_LIMIT: "512m"
+      PSM_APP_MEMORY_SWAP: "1024m"
+      PSM_APP_CPUS: "0.85"
+      PSM_MAX_KEPT_RELEASES: "3"
       POSTGRES_DB: psm
       POSTGRES_USER: ${POSTGRES_USER:-fadb}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-wokeh123}
@@ -429,6 +519,9 @@ services:
         INTERNAL_API_URL: http://psm-api:8000
     container_name: psm-web
     restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 256m
+    cpus: 0.75
     ports:
       - "3005:3005"
     environment:
@@ -450,6 +543,9 @@ services:
     image: nginx:alpine
     container_name: homelab_router
     restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 64m
+    cpus: 0.25
     ports:
       - "80:80"
     extra_hosts:
@@ -466,6 +562,9 @@ services:
     image: coredns/coredns:latest
     container_name: homelab_dns
     restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 64m
+    cpus: 0.25
     command: -conf /etc/coredns/Corefile
     environment:
       SERVER_LAN_IP: ${SERVER_LAN_IP:-192.168.25.105}

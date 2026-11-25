@@ -7,6 +7,7 @@ import subprocess
 import time
 import zipfile
 from typing import Callable, Optional, Dict, Any, List, Tuple
+from apps.agent.app.core.config import agent_settings
 from apps.agent.app.deployment.dockerfile_generator import (
     ensure_dockerfile_and_ignore,
     generate_dockerignore,
@@ -618,7 +619,7 @@ class DeploymentEngine:
                     pg_layer = (
                         "\n# Auto-injected by Personal Server Manager for PostgreSQL connectivity\n"
                         "RUN apt-get update && apt-get install -y --no-install-recommends libpq-dev postgresql-client \\\n"
-                        "    && docker-php-ext-install pdo_pgsql pgsql \\\n"
+                        "    && docker-php-ext-install -j2 pdo_pgsql pgsql \\\n"
                         "    && rm -rf /var/lib/apt/lists/*\n"
                     )
                     if "ENTRYPOINT" in content:
@@ -642,7 +643,7 @@ class DeploymentEngine:
                     my_layer = (
                         "\n# Auto-injected by Personal Server Manager for MySQL connectivity\n"
                         "RUN apt-get update && apt-get install -y --no-install-recommends default-mysql-client \\\n"
-                        "    && docker-php-ext-install pdo_mysql mysqli \\\n"
+                        "    && docker-php-ext-install -j2 pdo_mysql mysqli \\\n"
                         "    && rm -rf /var/lib/apt/lists/*\n"
                     )
                     if "ENTRYPOINT" in content:
@@ -656,6 +657,23 @@ class DeploymentEngine:
 
                     with open(full_df_path, "w", encoding="utf-8", newline="\n") as f:
                         f.write(content)
+
+            # 3. Bound Node.js heap memory during image build if NODE_OPTIONS is not set
+            if (
+                "NODE_OPTIONS" not in content
+                and re.search(r"\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?build\b", content)
+            ):
+                max_mb = max(512, int(getattr(agent_settings, "NODE_MAX_OLD_SPACE_MB", 1024)))
+                m_build = re.search(r"^RUN\s+.*\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?build\b", content, re.MULTILINE)
+                if m_build:
+                    node_mem_line = f'ENV NODE_OPTIONS="--max-old-space-size={max_mb}"\n'
+                    content = content[:m_build.start()] + node_mem_line + content[m_build.start():]
+                    with open(full_df_path, "w", encoding="utf-8", newline="\n") as f:
+                        f.write(content)
+                    log_callback(
+                        "info",
+                        f"[Resource-Guard] Membatasi heap Node.js saat build ({max_mb} MB) untuk mencegah server kehabisan RAM/OOM.",
+                    )
         except Exception as e:
             log_callback("warning", f"[Docker-Build] Dockerfile inspection note: {e}")
 
@@ -891,6 +909,95 @@ class DeploymentEngine:
         return True
 
     @staticmethod
+    def _wrap_low_priority_cmd(cmd: List[str]) -> List[str]:
+        """
+        Wrap heavy build/compose commands with Linux `ionice` and `nice` when available on PATH
+        so SSH, Nginx, Tailscale, databases, and control-plane APIs always preempt image builds.
+        """
+        prefix: List[str] = []
+        ionice_bin = shutil.which("ionice")
+        if ionice_bin:
+            ionice_cls = int(getattr(agent_settings, "BUILD_IONICE_CLASS", 2))
+            ionice_lvl = int(getattr(agent_settings, "BUILD_IONICE_LEVEL", 7))
+            prefix.extend([ionice_bin, "-c", str(ionice_cls), "-n", str(ionice_lvl)])
+        nice_bin = shutil.which("nice")
+        if nice_bin:
+            nice_lvl = int(getattr(agent_settings, "BUILD_NICE_LEVEL", 15))
+            prefix.extend([nice_bin, "-n", str(nice_lvl)])
+        return [*prefix, *cmd] if prefix else cmd
+
+    @staticmethod
+    def _build_throttled_env() -> Dict[str, str]:
+        """Build environment with bounded compiler/bundler concurrency and Node.js V8 heap limit."""
+        max_mb = max(512, int(getattr(agent_settings, "NODE_MAX_OLD_SPACE_MB", 1024)))
+        env = {
+            **os.environ,
+            "DOCKER_BUILDKIT": "1",
+            "BUILDKIT_PROGRESS": "plain",
+            "GOMAXPROCS": os.getenv("PSM_BUILD_JOBS", "2"),
+            "MAKEFLAGS": f"-j{os.getenv('PSM_BUILD_JOBS', '2')}",
+            "CARGO_BUILD_JOBS": os.getenv("PSM_BUILD_JOBS", "2"),
+            "NPM_CONFIG_JOBS": os.getenv("PSM_BUILD_JOBS", "2"),
+            "RAYON_NUM_THREADS": os.getenv("PSM_BUILD_JOBS", "2"),
+        }
+        if "NODE_OPTIONS" not in env:
+            env["NODE_OPTIONS"] = f"--max-old-space-size={max_mb}"
+        return env
+
+    @staticmethod
+    def _cleanup_old_release_images(
+        docker_bin: str,
+        current_tag: str,
+        log_callback: Callable[[str, str], None],
+    ) -> None:
+        """
+        Keep disk lean after deployment without breaking rollback:
+        1. Prune dangling (<none>) intermediate build images.
+        2. Keep only the latest N versioned tags (`repo:v<N>`) for this project.
+        """
+        try:
+            subprocess.run(
+                [docker_bin, "image", "prune", "-f"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=15,
+            )
+            if ":" not in current_tag:
+                return
+            repo, _ = current_tag.rsplit(":", 1)
+            keep_count = max(2, int(getattr(agent_settings, "MAX_KEPT_RELEASES", 3)))
+            res = subprocess.run(
+                [docker_bin, "images", repo, "--format", "{{.Tag}}"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                timeout=8,
+            )
+            if res.returncode != 0 or not res.stdout:
+                return
+            versioned_tags: List[Tuple[int, str]] = []
+            for raw_t in res.stdout.splitlines():
+                t = raw_t.strip()
+                m = re.match(r"^v(\d+)$", t)
+                if m:
+                    versioned_tags.append((int(m.group(1)), f"{repo}:{t}"))
+            versioned_tags.sort(key=lambda x: x[0], reverse=True)
+            stale_tags = [full_t for _, full_t in versioned_tags[keep_count:] if full_t != current_tag]
+            if stale_tags:
+                subprocess.run(
+                    [docker_bin, "rmi", *stale_tags],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=15,
+                )
+                log_callback(
+                    "info",
+                    f"[Storage-Guard] Membersihkan {len(stale_tags)} image rilis lama (menyimpan {keep_count} versi terbaru untuk Rollback).",
+                )
+        except Exception:
+            pass
+
+    @staticmethod
     def _get_compose_cmd() -> Optional[List[str]]:
         """Detect available Docker Compose executable (V2 plugin or standalone)."""
         docker_bin = shutil.which("docker") or "/usr/bin/docker"
@@ -914,7 +1021,7 @@ class DeploymentEngine:
         compose_file: str,
         log_callback: Callable[[str, str], None]
     ) -> bool:
-        """Execute docker compose up -d --build."""
+        """Execute docker compose up -d --build with low CPU/IO priority."""
         compose_path = os.path.join(workspace_dir, compose_file)
         if not os.path.exists(compose_path):
             log_callback("error", f"[Compose] Compose specification not found at {compose_path}")
@@ -925,10 +1032,12 @@ class DeploymentEngine:
             log_callback("error", "[Compose] Neither 'docker compose' (V2 plugin) nor 'docker-compose' was found in PATH.")
             return False
 
-        cmd = [*compose_cmd, "-f", compose_file, "up", "-d", "--build", "--remove-orphans"]
-        log_callback("info", f"[Compose] Launching stack: {' '.join(cmd)}")
+        raw_cmd = [*compose_cmd, "-f", compose_file, "up", "-d", "--build", "--remove-orphans"]
+        cmd = DeploymentEngine._wrap_low_priority_cmd(raw_cmd)
+        compose_env = DeploymentEngine._build_throttled_env()
+        log_callback("info", f"[Compose] Launching stack (low-priority guard): {' '.join(raw_cmd)}")
         try:
-            proc = subprocess.Popen(cmd, cwd=workspace_dir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            proc = subprocess.Popen(cmd, cwd=workspace_dir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=compose_env)
             for line in proc.stdout:
                 clean = line.strip()
                 if clean and should_log_build_line(clean):
@@ -1680,21 +1789,18 @@ class DeploymentEngine:
                 cli_available = False
 
         if cli_available:
-            build_env = {
-                **os.environ,
-                "DOCKER_BUILDKIT": "1",
-                "BUILDKIT_PROGRESS": "plain",
-            }
+            build_env = DeploymentEngine._build_throttled_env()
             build_success = False
             max_build_attempts = 2
             for build_attempt in range(1, max_build_attempts + 1):
-                build_cmd = [docker_bin, "build", "--progress=plain"]
+                raw_build_cmd = [docker_bin, "build", "--progress=plain"]
                 if no_cache and build_attempt == 1:
-                    build_cmd.append("--no-cache")
-                    log_callback("info", f"[Docker-CLI] Clean build (--no-cache) untuk image '{sanitized_tag}'...")
+                    raw_build_cmd.append("--no-cache")
+                    log_callback("info", f"[Docker-CLI] Clean build (--no-cache, CPU/IO throttled) untuk image '{sanitized_tag}'...")
                 else:
-                    log_callback("info", f"[Docker-CLI] Building image '{sanitized_tag}' from {dockerfile_path}...")
-                build_cmd.extend(["-t", sanitized_tag, "-f", dockerfile_path, "."])
+                    log_callback("info", f"[Docker-CLI] Building image '{sanitized_tag}' from {dockerfile_path} (CPU/IO throttled)...")
+                raw_build_cmd.extend(["-t", sanitized_tag, "-f", dockerfile_path, "."])
+                build_cmd = DeploymentEngine._wrap_low_priority_cmd(raw_build_cmd)
 
                 build_output_lines: List[str] = []
                 try:
@@ -1753,6 +1859,10 @@ class DeploymentEngine:
             if target_network:
                 log_callback("info", f"[PostgreSQL] Attaching container '{sanitized_name}' to database network '{target_network}'")
 
+            app_mem_limit = getattr(agent_settings, "APP_MEMORY_LIMIT", "512m") or "512m"
+            app_mem_swap = getattr(agent_settings, "APP_MEMORY_SWAP", "1024m") or "1024m"
+            app_cpus = str(getattr(agent_settings, "APP_CPUS", "0.85") or "0.85")
+
             for attempt in range(1, MAX_PORT_RETRIES + 1):
                 attempt_port_args: List[str] = []
                 for hp, cp in current_mappings:
@@ -1762,8 +1872,12 @@ class DeploymentEngine:
                     docker_bin, "run", "-d",
                     "--restart", "unless-stopped",
                     "--name", sanitized_name,
-                    "--memory=768m",
-                    "--cpus=1.0",
+                    f"--memory={app_mem_limit}",
+                    f"--memory-swap={app_mem_swap}",
+                    f"--cpus={app_cpus}",
+                    "--cpu-shares=512",
+                    "--log-opt", "max-size=10m",
+                    "--log-opt", "max-file=3",
                     "--add-host=host.docker.internal:host-gateway",
                 ]
                 if target_network:
@@ -1795,6 +1909,8 @@ class DeploymentEngine:
                             host_ports=[hp for hp, _ in current_mappings],
                             log_callback=log_callback,
                         )
+                        if ready:
+                            DeploymentEngine._cleanup_old_release_images(docker_bin, sanitized_tag, log_callback)
                         return ready
 
                     combined_out = "\n".join(run_output_lines)
@@ -1871,6 +1987,10 @@ class DeploymentEngine:
                     "name": sanitized_name,
                     "detach": True,
                     "restart_policy": {"Name": "unless-stopped"},
+                    "mem_limit": getattr(agent_settings, "APP_MEMORY_LIMIT", "512m") or "512m",
+                    "memswap_limit": getattr(agent_settings, "APP_MEMORY_SWAP", "1024m") or "1024m",
+                    "nano_cpus": int(float(getattr(agent_settings, "APP_CPUS", "0.85") or 0.85) * 1_000_000_000),
+                    "cpu_shares": 512,
                     "ports": attempt_ports_map if attempt_ports_map else None,
                     "environment": env_dict if env_dict else None,
                     "extra_hosts": {"host.docker.internal": "host-gateway"},

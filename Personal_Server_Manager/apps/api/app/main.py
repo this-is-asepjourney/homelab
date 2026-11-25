@@ -65,6 +65,15 @@ def init_db():
                         conn.commit()
                     except Exception:
                         pass
+            for idx_sql in [
+                "CREATE INDEX IF NOT EXISTS idx_server_metrics_srv_rec ON server_metrics (server_id, recorded_at DESC);",
+                "CREATE INDEX IF NOT EXISTS idx_deployment_logs_dep_seq ON deployment_logs (deployment_id, sequence ASC);",
+            ]:
+                try:
+                    conn.execute(text(idx_sql))
+                    conn.commit()
+                except Exception:
+                    pass
     except Exception:
         pass
     db = db_session.SessionLocal()

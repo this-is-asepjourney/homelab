@@ -3,22 +3,22 @@ set -e
 
 mkdir -p /etc/nginx/conf.d/projects /etc/nginx/conf.d/maintenance 2>/dev/null || true
 
-calc_hash() {
-    find /etc/nginx/conf.d -type f \( -name '*.conf' -o -name '*.html' \) -exec sha256sum {} + 2>/dev/null | sort | sha256sum | awk '{print $1}'
+calc_signature() {
+    find /etc/nginx/conf.d -type f \( -name '*.conf' -o -name '*.html' \) -exec stat -c '%n:%Y:%s' {} + 2>/dev/null | sort
 }
 
 nginx -g "daemon off;" &
 NGINX_PID=$!
 
-LAST_HASH=$(calc_hash)
+LAST_SIG=$(calc_signature)
 
 while kill -0 "$NGINX_PID" 2>/dev/null; do
-    sleep 3
-    NEW_HASH=$(calc_hash)
-    if [ "$NEW_HASH" != "$LAST_HASH" ]; then
+    sleep 5
+    NEW_SIG=$(calc_signature)
+    if [ "$NEW_SIG" != "$LAST_SIG" ]; then
         if nginx -t >/dev/null 2>&1; then
             nginx -s reload >/dev/null 2>&1 || true
-            LAST_HASH="$NEW_HASH"
+            LAST_SIG="$NEW_SIG"
         fi
     fi
 done

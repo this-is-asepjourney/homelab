@@ -1,16 +1,49 @@
 import subprocess
 import json
 import logging
+import time
+from datetime import datetime, timezone
 from typing import List, Dict, Any
+from apps.agent.app.core.config import agent_settings
 
 logger = logging.getLogger(__name__)
+
+
+def _format_bytes_human(num_bytes: Any) -> str:
+    try:
+        val = float(num_bytes or 0)
+    except Exception:
+        return "0 MB"
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if abs(val) < 1024.0 or unit == "TB":
+            return f"{val:.1f} {unit}" if unit != "B" else f"{int(val)} B"
+        val /= 1024.0
+    return "0 MB"
+
+
+def _format_created_since(created_ts: Any) -> str:
+    try:
+        ts = int(created_ts)
+        delta = max(0, int(datetime.now(timezone.utc).timestamp()) - ts)
+        if delta < 60:
+            return "just now"
+        if delta < 3600:
+            return f"{delta // 60}m ago"
+        if delta < 86400:
+            return f"{delta // 3600}h ago"
+        return f"{delta // 86400}d ago"
+    except Exception:
+        return "recently"
+
 
 class DockerManager:
     def __init__(self):
         self._sdk = None
+        self._stats_cache: List[Dict[str, Any]] = []
+        self._stats_cache_time: float = 0.0
         try:
             import docker
-            self._sdk = docker.from_env()
+            self._sdk = docker.from_env(timeout=5)
         except Exception as e:
             logger.info(f"Docker SDK not available or daemon not running: {e}. Falling back to CLI.")
 
@@ -33,33 +66,30 @@ class DockerManager:
 
         if self._sdk:
             try:
+                # Single low-level API request (avoids N+1 per-container image inspect calls)
+                raw_containers = self._sdk.api.containers(all=True)
                 containers = []
-                for c in self._sdk.containers.list(all=True):
+                for item in raw_containers:
                     ports_list = []
-                    port_bindings = (c.attrs.get("NetworkSettings", {}).get("Ports") or {})
-                    for internal_port, host_bindings in port_bindings.items():
-                        internal_num = internal_port.split("/")[0]
-                        proto = internal_port.split("/")[1] if "/" in internal_port else "tcp"
-                        if host_bindings:
-                            for hb in host_bindings:
-                                ports_list.append({
-                                    "internal": int(internal_num) if internal_num.isdigit() else internal_num,
-                                    "external": int(hb.get("HostPort", internal_num)) if str(hb.get("HostPort", "")).isdigit() else internal_num,
-                                    "protocol": proto,
-                                })
-                        else:
+                    for p in item.get("Ports") or []:
+                        internal_num = p.get("PrivatePort")
+                        external_num = p.get("PublicPort", internal_num)
+                        proto = p.get("Type", "tcp")
+                        if internal_num is not None:
                             ports_list.append({
-                                "internal": int(internal_num) if internal_num.isdigit() else internal_num,
-                                "external": int(internal_num) if internal_num.isdigit() else internal_num,
+                                "internal": int(internal_num) if str(internal_num).isdigit() else internal_num,
+                                "external": int(external_num) if str(external_num).isdigit() else internal_num,
                                 "protocol": proto,
                             })
-                    image_tags = c.image.tags if c.image and c.image.tags else [c.attrs.get("Config", {}).get("Image", "unknown")]
+                    names = item.get("Names") or []
+                    clean_name = names[0].lstrip("/") if names else item.get("Id", "")[:12]
+                    state = (item.get("State") or "exited").lower()
                     containers.append({
-                        "docker_id": c.short_id,
-                        "name": c.name,
-                        "image": image_tags[0] if image_tags else "unknown",
-                        "status": "running" if c.status == "running" else "stopped",
-                        "state": c.status,
+                        "docker_id": (item.get("Id") or "")[:12],
+                        "name": clean_name,
+                        "image": item.get("Image") or "unknown",
+                        "status": "running" if state == "running" else "stopped",
+                        "state": state,
                         "ports": ports_list,
                     })
                 return containers
@@ -89,6 +119,30 @@ class DockerManager:
     def list_images(self) -> List[Dict[str, Any]]:
         if not self.is_available():
             return []
+        if self._sdk:
+            try:
+                raw_images = self._sdk.api.images()
+                images = []
+                for img in raw_images:
+                    short_id = (img.get("Id") or "").replace("sha256:", "")[:12]
+                    size_str = _format_bytes_human(img.get("Size", 0))
+                    created_str = _format_created_since(img.get("Created"))
+                    tags = img.get("RepoTags") or ["<none>:<none>"]
+                    for repo_tag in tags:
+                        if ":" in repo_tag:
+                            repo, tag = repo_tag.rsplit(":", 1)
+                        else:
+                            repo, tag = repo_tag, "latest"
+                        images.append({
+                            "id": short_id,
+                            "repository": repo,
+                            "tag": tag,
+                            "size": size_str,
+                            "created": created_str,
+                        })
+                return images
+            except Exception:
+                pass
         try:
             cmd = ["docker", "images", "--format", "{{json .}}"]
             res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=5)
@@ -110,6 +164,19 @@ class DockerManager:
     def list_volumes(self) -> List[Dict[str, Any]]:
         if not self.is_available():
             return []
+        if self._sdk:
+            try:
+                raw_vols = (self._sdk.api.volumes() or {}).get("Volumes") or []
+                return [
+                    {
+                        "name": v.get("Name", ""),
+                        "driver": v.get("Driver", "local"),
+                        "mountpoint": v.get("Mountpoint", f"/var/lib/docker/volumes/{v.get('Name', '')}/_data"),
+                    }
+                    for v in raw_vols
+                ]
+            except Exception:
+                pass
         try:
             cmd = ["docker", "volume", "ls", "--format", "{{json .}}"]
             res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=5)
@@ -129,6 +196,19 @@ class DockerManager:
     def list_networks(self) -> List[Dict[str, Any]]:
         if not self.is_available():
             return []
+        if self._sdk:
+            try:
+                raw_nets = self._sdk.api.networks() or []
+                return [
+                    {
+                        "name": n.get("Name", ""),
+                        "driver": n.get("Driver", "bridge"),
+                        "scope": n.get("Scope", "local"),
+                    }
+                    for n in raw_nets
+                ]
+            except Exception:
+                pass
         try:
             cmd = ["docker", "network", "ls", "--format", "{{json .}}"]
             res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=5)
@@ -255,10 +335,24 @@ class DockerManager:
             logger.warning(f"Failed to inspect container {container_id}: {e}")
         return {}
 
-    def get_all_container_stats(self) -> List[Dict[str, Any]]:
-        """Collect live CPU and Memory statistics for all running containers."""
+    def get_all_container_stats(self, force: bool = False) -> List[Dict[str, Any]]:
+        """Collect live CPU and Memory statistics for running containers with TTL caching and build-time guard."""
+        now = time.monotonic()
+        ttl = max(5, int(getattr(agent_settings, "CONTAINER_STATS_TTL", 30)))
+
+        # Avoid hammering Docker daemon with `docker stats` while a build/deployment is running
+        if not force:
+            try:
+                from apps.agent.app.jobs.executor import is_deployment_active
+                if is_deployment_active():
+                    return list(self._stats_cache)
+            except Exception:
+                pass
+            if self._stats_cache and (now - self._stats_cache_time) < ttl:
+                return list(self._stats_cache)
+
         if not self.is_available():
-            return []
+            return list(self._stats_cache)
         try:
             cmd = ["docker", "stats", "--no-stream", "--format", "{{json .}}"]
             res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=8)
@@ -279,8 +373,10 @@ class DockerManager:
                     })
                 except Exception:
                     pass
+            self._stats_cache = stats
+            self._stats_cache_time = now
             return stats
         except Exception:
-            return []
+            return list(self._stats_cache)
 
 docker_manager = DockerManager()
