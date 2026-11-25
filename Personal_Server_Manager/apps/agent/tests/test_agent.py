@@ -537,6 +537,35 @@ def test_serialized_deployment_guard_and_build_throttling(tmp_path, monkeypatch)
     assert 'ENV NODE_OPTIONS="--max-old-space-size=' in patched
     assert patched.index("NODE_OPTIONS") < patched.index("RUN npm run build")
 
+    # 4. Monorepo pnpm --filter build also receives NODE_OPTIONS heap cap
+    mono_df = tmp_path / "Dockerfile.mono"
+    mono_df.write_text("FROM node:22-alpine AS builder\nRUN pnpm --filter web build\n")
+    DeploymentEngine.prepare_dockerfile_environment(
+        workspace_dir=str(tmp_path),
+        dockerfile_path="Dockerfile.mono",
+        log_callback=lambda lvl, msg: prep_logs.append((lvl, msg)),
+    )
+    assert "NODE_OPTIONS" in mono_df.read_text()
+
+    # 5. Auto-heal strips `--mount=type=cache` when legacy builder rejects BuildKit mount syntax
+    bk_df = tmp_path / "Dockerfile.archflow"
+    bk_df.write_text(
+        "FROM node:22-alpine\n"
+        "RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store pnpm install --frozen-lockfile\n"
+    )
+    healed_bk, kind_bk = DeploymentEngine._attempt_build_auto_heal(
+        workspace_dir=str(tmp_path),
+        dockerfile_path="Dockerfile.archflow",
+        build_output="the --mount option requires BuildKit. Refer to https://docs.docker.com/go/buildkit/",
+        log_callback=lambda lvl, msg: prep_logs.append((lvl, msg)),
+    )
+    assert healed_bk is True
+    assert kind_bk == "buildkit_mount_fallback"
+    cleaned_bk = bk_df.read_text()
+    assert "--mount=type=cache" not in cleaned_bk
+    assert "RUN pnpm install --frozen-lockfile" in cleaned_bk
+
+
 
 
 

@@ -658,13 +658,13 @@ class DeploymentEngine:
                     with open(full_df_path, "w", encoding="utf-8", newline="\n") as f:
                         f.write(content)
 
-            # 3. Bound Node.js heap memory during image build if NODE_OPTIONS is not set
+            # 3. Bound Node.js heap memory during image build (supports standard & monorepo pnpm/turbo builds)
             if (
                 "NODE_OPTIONS" not in content
-                and re.search(r"\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?build\b", content)
+                and re.search(r"\b(?:npm|pnpm|yarn|bun|npx|turbo)\b[^\n]*\bbuild\b", content)
             ):
                 max_mb = max(512, int(getattr(agent_settings, "NODE_MAX_OLD_SPACE_MB", 1024)))
-                m_build = re.search(r"^RUN\s+.*\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?build\b", content, re.MULTILINE)
+                m_build = re.search(r"^RUN\s+[^\n]*\b(?:npm|pnpm|yarn|bun|npx|turbo)\b[^\n]*\bbuild\b", content, re.MULTILINE)
                 if m_build:
                     node_mem_line = f'ENV NODE_OPTIONS="--max-old-space-size={max_mb}"\n'
                     content = content[:m_build.start()] + node_mem_line + content[m_build.start():]
@@ -1568,6 +1568,19 @@ class DeploymentEngine:
         return [ln for ln in output_lines[-max_lines:] if ln.strip()]
 
     @staticmethod
+    def _strip_buildkit_cache_mounts(df_content: str) -> str:
+        """
+        Strip `--mount=type=cache,...` flags from Dockerfile RUN instructions as a fallback
+        only when a target Docker daemon does not have BuildKit enabled.
+        """
+        return re.sub(
+            r"(^\s*RUN\s+)(?:--mount=type=cache[^\s]*\s+)+",
+            r"\1",
+            df_content,
+            flags=re.MULTILINE | re.IGNORECASE,
+        )
+
+    @staticmethod
     def _attempt_build_auto_heal(
         workspace_dir: str,
         dockerfile_path: str,
@@ -1576,10 +1589,30 @@ class DeploymentEngine:
     ) -> Tuple[bool, str]:
         """
         Inspect failed build output and automatically heal recoverable issues in the workspace copy:
+          0. BuildKit `--mount=type=cache` unsupported on legacy builder daemon
           1. Lockfile mismatch (pnpm --frozen-lockfile / npm ci)
           2. Transient registry/network timeouts
         """
         low = (build_output or "").lower()
+
+        # 0. BuildKit `--mount=type=cache` fallback if daemon ran legacy builder
+        if "requires buildkit" in low or ("--mount" in low and "buildkit" in low):
+            full_df = os.path.join(workspace_dir, dockerfile_path)
+            if os.path.exists(full_df):
+                try:
+                    with open(full_df, "r", encoding="utf-8", errors="ignore") as f:
+                        df_content = f.read()
+                    stripped = DeploymentEngine._strip_buildkit_cache_mounts(df_content)
+                    if stripped != df_content:
+                        with open(full_df, "w", encoding="utf-8", newline="\n") as f:
+                            f.write(stripped)
+                        log_callback(
+                            "warning",
+                            "[Auto-Heal] Daemon Docker belum mengaktifkan BuildKit untuk '--mount=type=cache'. Menyesuaikan instruksi RUN dan mengulang build otomatis...",
+                        )
+                        return True, "buildkit_mount_fallback"
+                except Exception:
+                    pass
 
         # 1. Lockfile mismatch auto-heal
         lockfile_signals = (
@@ -1779,13 +1812,22 @@ class DeploymentEngine:
         MAX_PORT_RETRIES = 5
         failed_host_ports: set = set()
 
-        # 1. Check if Docker CLI is available
+        # 1. Check if Docker CLI is available (use fast `docker version` instead of slow `docker info`
+        #    so busy disk I/O never causes a false 4s timeout fallback to legacy non-BuildKit Docker SDK!)
         docker_bin = shutil.which("docker") or "/usr/bin/docker"
         cli_available = False
         if os.path.exists(docker_bin) or shutil.which("docker"):
             try:
-                chk = subprocess.run([docker_bin, "info"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=4)
+                chk = subprocess.run(
+                    [docker_bin, "version", "--format", "{{.Server.Version}}"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=15,
+                )
                 cli_available = (chk.returncode == 0)
+            except subprocess.TimeoutExpired:
+                # Binary exists; if Docker socket is mounted, still prefer CLI BuildKit over legacy SDK
+                cli_available = os.path.exists("/var/run/docker.sock")
             except Exception:
                 cli_available = False
 
@@ -1939,6 +1981,20 @@ class DeploymentEngine:
             return False
 
         # 2. FALLBACK: Use Python Docker SDK directly through /var/run/docker.sock
+        # Note: Docker SDK's `/build` endpoint uses the legacy v1 builder (no BuildKit `--mount=type=cache`).
+        try:
+            with open(full_df_path, "r", encoding="utf-8", errors="ignore") as f:
+                sdk_df_raw = f.read()
+            sdk_df_clean = DeploymentEngine._strip_buildkit_cache_mounts(sdk_df_raw)
+            if sdk_df_clean != sdk_df_raw:
+                with open(full_df_path, "w", encoding="utf-8", newline="\n") as f:
+                    f.write(sdk_df_clean)
+                log_callback(
+                    "warning",
+                    "[Docker-SDK] Menyesuaikan '--mount=type=cache' pada Dockerfile karena mode fallback SDK menggunakan legacy builder...",
+                )
+        except Exception:
+            pass
         log_callback("info", "[Docker-SDK] Utilizing Docker daemon socket connection...")
         try:
             import docker
