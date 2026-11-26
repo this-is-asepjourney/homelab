@@ -122,3 +122,14 @@ def get_worker_status():
         message="Worker status retrieved successfully",
     )
 
+
+@router.get("/system/central-pulse")
+def get_public_central_pulse(db: Session = Depends(get_db)):
+    """Lightweight cached Central Hub pulse for PAP Mission Control UI and PSM Dashboard."""
+    from app.modules.infra.service import InfraService
+    pulse = InfraService(db).get_central_pulse()
+    return success_response(
+        data=pulse,
+        message="Central Hub pulse retrieved successfully",
+    )
+

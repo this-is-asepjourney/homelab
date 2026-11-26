@@ -378,3 +378,98 @@ def test_local_dns_maintenance_mode_vhost(monkeypatch, tmp_path):
     restored_vhost = vhost_file.read_text(encoding="utf-8")
     assert "proxy_pass http://host.docker.internal:3101;" in restored_vhost
     assert "return 503;" not in restored_vhost
+
+
+def test_homelab_unified_backup_flow_and_async_jobs(
+    client: TestClient, db_session: Session, admin_headers: dict[str, str], monkeypatch, tmp_path
+):
+    """Verifies Homelab v3.0 Backup Pipeline (databases, real configs, PAP/PSM state, verification, async jobs)."""
+    import time
+    monkeypatch.setenv("BACKUP_STORAGE_DIR", str(tmp_path))
+    seed_platform_registry(db_session)
+
+    # 1. Check backup flow status endpoint
+    flow_res = client.get("/api/v1/backups/flow-status", headers=admin_headers)
+    assert flow_res.status_code == 200
+    flow_data = flow_res.json()["data"]
+    assert len(flow_data["pipeline_architecture"]) == 6
+    assert flow_data["local_vault"]["directory"] == str(tmp_path.resolve())
+    assert "minio_s3_vault" in flow_data
+
+    # 2. Trigger full Homelab stack backup (non-blocking threadpool mode)
+    bup_res = client.post(
+        "/api/v1/backups/create",
+        headers=admin_headers,
+        json={"scope": "all", "note": "Homelab v3 integration check", "sync_to_s3": False},
+    )
+    assert bup_res.status_code == 201
+    assert "X-Response-Time-Ms" in bup_res.headers
+    manifest = bup_res.json()["data"]
+    assert manifest["version"] == "3.0"
+    assert "pap_core" in manifest["databases"]
+    assert manifest["databases"]["pap_core"]["status"] == "success"
+    assert manifest["platform_coordination"]["pap_projects_count"] >= 4
+    cfg_names = {c["name"] for c in manifest["configs"]}
+    assert "docker-compose.yml" in cfg_names
+    assert "prometheus.yml" in cfg_names
+
+    fname = manifest["archive"]["filename"]
+
+    # 3. Verify archive integrity
+    ver_res = client.post(f"/api/v1/backups/{fname}/verify", headers=admin_headers)
+    assert ver_res.status_code == 200
+    ver_data = ver_res.json()["data"]
+    assert ver_data["status"] == "PASSED"
+    assert ver_data["tar_intact"] is True
+    assert ver_data["manifest_intact"] is True
+
+    # 4. Trigger non-blocking async background backup job (202 Accepted)
+    job_res = client.post(
+        "/api/v1/backups/jobs",
+        headers=admin_headers,
+        json={"scope": "configs", "note": "Async background config backup", "sync_to_s3": False},
+    )
+    assert job_res.status_code == 202
+    job_id = job_res.json()["data"]["job_id"]
+    assert job_id.startswith("bjob-")
+
+    # Wait briefly for background worker thread to complete
+    final_job = None
+    for _ in range(30):
+        st_res = client.get(f"/api/v1/backups/jobs/{job_id}", headers=admin_headers)
+        assert st_res.status_code == 200
+        final_job = st_res.json()["data"]
+        if final_job["status"] in ("completed", "failed"):
+            break
+        time.sleep(0.05)
+
+    assert final_job is not None
+    assert final_job["status"] == "completed"
+    assert final_job["archive_filename"].endswith(".tar.gz")
+
+
+def test_responsive_central_pulse_and_hub_overview(
+    client: TestClient, db_session: Session, admin_headers: dict[str, str]
+):
+    """Verifies Central Gateway responsiveness headers, cached central-pulse, and hub overview."""
+    seed_platform_registry(db_session)
+
+    pulse_res = client.get("/api/v1/infra/central-pulse", headers=admin_headers)
+    assert pulse_res.status_code == 200
+    assert float(pulse_res.headers["X-Response-Time-Ms"]) >= 0.0
+    pulse = pulse_res.json()["data"]
+    assert pulse["gateway"]["mode"] == "responsive_central_hub"
+    assert "redis" in pulse["databases"]
+    assert "minio" in pulse["services_summary"]["items"]
+    assert "backup_pipeline" in pulse
+
+    pub_pulse = client.get("/api/v1/system/central-pulse")
+    assert pub_pulse.status_code == 200
+    assert pub_pulse.json()["data"]["gateway"]["status"] == "healthy"
+
+    hub_res = client.get("/api/v1/integrations/hub/overview", headers=admin_headers)
+    assert hub_res.status_code == 200
+    hub_data = hub_res.json()["data"]
+    assert hub_data["main_api"]["responsiveness_mode"] == "cached_parallel_hub"
+    assert "backup_vault" in hub_data
+

@@ -1,10 +1,13 @@
-"""Service for monitoring homelab infrastructure and PAP operational state."""
+"""Service for monitoring homelab infrastructure and PAP operational state with parallel cached probes."""
 
 from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
+from app.core.hub_cache import hub_cache
+from app.integrations.minio import MinioS3Adapter
 from app.integrations.mqtt import MqttAdapter
 from app.integrations.prometheus import PrometheusAdapter
 from app.integrations.psm import PsmAdapter
@@ -16,6 +19,7 @@ class MonitoringService:
     def __init__(self, db: Session) -> None:
         self.db = db
         self.repo = MonitoringRepository(db)
+        self.settings = get_settings()
 
     def get_services_status(self) -> list[dict[str, Any]]:
         db_ok = False
@@ -25,10 +29,30 @@ class MonitoringService:
         except Exception:
             db_ok = False
 
-        prom_status = PrometheusAdapter().check_health()
-        mqtt_status = MqttAdapter().check_health()
-        stock_status = StockUmkmAdapter().check_health()
-        psm_status = PsmAdapter().check_health()
+        def _probe_upstreams() -> dict[str, dict[str, Any]]:
+            return hub_cache.run_parallel(
+                {
+                    "prom": lambda: PrometheusAdapter().check_health(),
+                    "mqtt": lambda: MqttAdapter().check_health(),
+                    "stock": lambda: StockUmkmAdapter().check_health(),
+                    "psm": lambda: PsmAdapter().check_health(),
+                    "minio": lambda: MinioS3Adapter().check_health(),
+                },
+                timeout=1.5,
+            )
+
+        upstreams = hub_cache.get_or_compute(
+            "monitoring:upstreams",
+            _probe_upstreams,
+            ttl_sec=self.settings.HUB_CACHE_TTL_SECONDS,
+            stale_ttl_sec=self.settings.HUB_STALE_TTL_SECONDS,
+        )
+
+        prom_status = upstreams.get("prom", {})
+        mqtt_status = upstreams.get("mqtt", {})
+        stock_status = upstreams.get("stock", {})
+        psm_status = upstreams.get("psm", {})
+        minio_status = upstreams.get("minio", {})
 
         return [
             {
@@ -42,14 +66,19 @@ class MonitoringService:
                 **psm_status,
             },
             {
+                "name": "minio_s3_vault",
+                "port": 9000,
+                **minio_status,
+            },
+            {
                 "name": "iot_dashboard_fleet",
-                "port": 8088,
+                "port": 9273,
                 "status": "healthy",
                 "reachable": True,
             },
             {
                 "name": "prometheus",
-                "port": 9001,
+                "port": 9090,
                 "status": "healthy" if prom_status.get("reachable") else "standby",
                 **prom_status,
             },
@@ -74,4 +103,3 @@ class MonitoringService:
             "webhooks_active": self.repo.count_active_webhooks(),
             "services": self.get_services_status(),
         }
-

@@ -38,14 +38,30 @@ class Settings(BaseSettings):
     DB_POOL_SIZE: int = 5
     DB_MAX_OVERFLOW: int = 5
     DB_POOL_TIMEOUT: int = 10
-    DB_CONNECT_TIMEOUT: int = 5
+    DB_CONNECT_TIMEOUT: int = 2
 
-    # Homelab PostgreSQL reference (Personal Server Manager & Nextcloud)
+    # Central Hub Responsiveness & Caching
+    HUB_CACHE_TTL_SECONDS: float = 10.0
+    HUB_STALE_TTL_SECONDS: float = 60.0
+    PROBE_TIMEOUT_SECONDS: float = 0.45
+    BACKUP_STORAGE_DIR: str = "/opt/psm/pap_backups"
+
+    # Homelab PostgreSQL reference (Personal Server Manager, Nextcloud & Eternal IoT)
+    POSTGRES_HOST: str = "192.168.25.105"
+    POSTGRES_PORT: int = 5432
+    POSTGRES_USER: str = "fadb"
+    POSTGRES_PASSWORD: str = "wokeh123"
+    IOT_POSTGRES_DB: str = "eternal_iot"
+    NEXTCLOUD_DB_NAME: str = "nextcloud"
     PSM_DATABASE_HOST: str = "192.168.25.105"
     PSM_DATABASE_PORT: int = 5432
     PSM_DATABASE_NAME: str = "psm"
     PSM_DATABASE_USER: str = "fadb"
     PSM_DATABASE_PASSWORD: str = "wokeh123"
+
+    # Homelab Redis Cache & Broker reference
+    REDIS_HOST: str = "redis"
+    REDIS_PORT: int = 6379
 
     # Homelab MySQL reference (fadb / stock_umkm)
     STOCK_DB_HOST: str = "192.168.25.105"
@@ -84,20 +100,21 @@ class Settings(BaseSettings):
     INFLUXDB_BUCKET: str = "eternal_telemetry"
     INFLUXDB_TOKEN: str = "homelab-influxdb-master-auth-token-2026"
 
-    # MinIO S3 Object Storage Settings
+    # MinIO / Silo S3 Object Storage Settings
     MINIO_HOST: str = "minio"
     MINIO_PORT: int = 9000
     MINIO_CONSOLE_PORT: int = 9002
     MINIO_URL: str = "http://minio:9000"
-    MINIO_PUBLIC_URL: str = "http://192.168.25.101:9000"
-    MINIO_CONSOLE_URL: str = "http://192.168.25.101:9002"
+    MINIO_PUBLIC_URL: str = "http://192.168.25.105:9000"
+    MINIO_CONSOLE_URL: str = "http://192.168.25.105:9002"
     MINIO_ROOT_USER: str = "admin"
     MINIO_ROOT_PASSWORD: str = "admin12345"
     MINIO_DEFAULT_BUCKET: str = "homelab-storage"
+    MINIO_BACKUP_BUCKET: str = "backups"
 
-    # Prometheus & Monitoring (port 9090 per docker-homelab-setup.md)
+    # Prometheus & Monitoring (port 9090 per docker-compose.yml)
     PROMETHEUS_URL: str = "http://192.168.25.105:9090"
-    PROMETHEUS_TIMEOUT_SECONDS: float = 5.0
+    PROMETHEUS_TIMEOUT_SECONDS: float = 1.5
 
     # Mosquitto MQTT (port 1883 per docker-homelab-setup.md)
     MQTT_HOST: str = "192.168.25.105"

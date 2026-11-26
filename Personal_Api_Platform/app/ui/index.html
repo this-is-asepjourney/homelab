@@ -737,20 +737,24 @@
               <span class="badge badge-success">Port 8088 / 9273</span>
             </li>
             <li class="status-item">
-              <span class="status-name">🗄️ PostgreSQL Server (psm, pap_core)</span>
-              <span class="badge badge-success">Port 5432 • Host</span>
+              <span class="status-name">🗄️ PostgreSQL 16 (pap_core, psm, eternal_iot, nextcloud)</span>
+              <span class="badge badge-success">Port 5432 • Core</span>
             </li>
             <li class="status-item">
-              <span class="status-name">🐬 MySQL Server (eternal_db, stock_umkm)</span>
-              <span class="badge badge-success">Port 3306 • Host</span>
+              <span class="status-name">🐬 MySQL 8.4 (fadb, stock_umkm)</span>
+              <span class="badge badge-success">Port 3306 • Shared</span>
             </li>
             <li class="status-item">
-              <span class="status-name">📡 Mosquitto MQTT Broker</span>
-              <span class="badge badge-info">Port 1883 • Host</span>
+              <span class="status-name">☁️ MinIO / Silo S3 Vault &amp; Redis 7</span>
+              <span class="badge badge-cyan">S3 :9000/:9002 • Redis :6379</span>
+            </li>
+            <li class="status-item">
+              <span class="status-name">📡 Mosquitto MQTT &amp; Telegraf</span>
+              <span class="badge badge-info">Port 1883 / 9273</span>
             </li>
             <li class="status-item">
               <span class="status-name">📈 Prometheus &amp; Grafana Monitoring</span>
-              <span class="badge badge-info">Port 9001 / 3001</span>
+              <span class="badge badge-info">Port 9090 / 3000</span>
             </li>
           </ul>
         </div>
@@ -775,11 +779,14 @@
     <div id="tab-backups" class="tab-content">
       <div class="card" style="margin-bottom: 1.5rem;">
         <div class="card-title">
-          <span>Manajemen Backup &amp; Disaster Recovery</span>
-          <button class="btn btn-primary" onclick="openCreateBackupModal()">➕ Buat Backup Baru</button>
+          <span>Homelab Unified Backup &amp; MinIO S3 Disaster Recovery</span>
+          <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
+            <span class="badge badge-cyan" id="s3-vault-badge">☁️ S3 Vault: Checking...</span>
+            <button class="btn btn-primary" onclick="openCreateBackupModal()">➕ Buat Backup Baru</button>
+          </div>
         </div>
-        <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 1rem;">
-          Mencadangkan seluruh database terpadu (PostgreSQL <code>psm</code>, <code>pap_core</code>; MySQL <code>eternal_db</code>, <code>stock_umkm</code>; InfluxDB <code>eternal_telemetry</code>) serta konfigurasi jaringan &amp; layanan (CoreDNS, Nginx Ingress Router, Prometheus, Mosquitto, Telegraf, Docker Compose, .env) ke dalam arsip terkompresi <code>.tar.gz</code> dengan verifikasi integritas checksum SHA-256 otomatis.
+        <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 1rem; line-height: 1.55;">
+          Alur backup terpusat Homelab: <b>(1)</b> Auto-discovery PostgreSQL 16 (<code>pap_core</code>, <code>psm</code>, <code>eternal_iot</code>, <code>nextcloud</code>, DB project) &amp; MySQL 8.4 (<code>fadb</code>, <code>stock_umkm</code>) menggunakan <code>nice/ionice</code> agar server tetap ringan &rarr; <b>(2)</b> Konfigurasi CoreDNS, Nginx Ingress VHost, Prometheus, Grafana, Mosquitto, Telegraf, Docker Compose, dan <code>.env</code> teredaksi &rarr; <b>(3)</b> Koordinasi Registry PAP &amp; Workspace PSM &rarr; <b>(4)</b> Arsip <code>.tar.gz</code> ber-checksum SHA-256 + replikasi otomatis ke bucket MinIO S3 <code>s3://backups/pap/</code>.
         </p>
 
         <div id="backup-alert" style="display: none; padding: 0.75rem; border-radius: 6px; margin-bottom: 1rem; font-size: 0.85rem;"></div>
@@ -974,15 +981,21 @@
                 <td>Telemetry Bridge</td>
               </tr>
               <tr>
+                <td><b>minio</b></td>
+                <td><code style="color: #22d3ee;">9000 / 9002</code></td>
+                <td>MinIO / Silo S3 Object Storage &amp; Off-Container Backup Vault (<code>backups</code>)</td>
+                <td>Object Storage</td>
+              </tr>
+              <tr>
                 <td><b>grafana</b></td>
-                <td><code style="color: #f43f5e;">3001</code></td>
-                <td>Grafana Server Host (Visual Analytics)</td>
+                <td><code style="color: #f43f5e;">3000</code></td>
+                <td>Grafana Observability Dashboards (grafana.homelab)</td>
                 <td>Visual Dashboard</td>
               </tr>
               <tr>
                 <td><b>prometheus</b></td>
-                <td><code style="color: #eab308;">9001</code></td>
-                <td>Prometheus Scrape Server</td>
+                <td><code style="color: #eab308;">9090</code></td>
+                <td>Prometheus TSDB Scrape Server (prometheus.homelab)</td>
                 <td>Metrics TSDB</td>
               </tr>
             </tbody>
@@ -1062,14 +1075,25 @@
         <div class="form-group">
           <label class="form-label">Lingkup Cadangan (Backup Scope)</label>
           <select id="backup-scope" class="form-control">
-            <option value="all">Full System (Semua Project: Database + Konfigurasi)</option>
-            <option value="databases">Hanya Database (PostgreSQL: psm, pap_core; MySQL: eternal_db, stock_umkm)</option>
-            <option value="configs">Hanya Konfigurasi (Docker Compose, Prometheus, Mosquitto, Telegraf, .env)</option>
+            <option value="all">Full Homelab Stack (Database + Konfigurasi + Koordinasi PSM + S3)</option>
+            <option value="databases">Hanya Database (PostgreSQL 16 + MySQL 8.4 Terdaftar)</option>
+            <option value="configs">Hanya Konfigurasi (Compose, CoreDNS, Nginx VHost, Prometheus, Grafana, MQTT)</option>
+            <option value="psm">Hanya State Registry PAP &amp; Workspace PSM</option>
           </select>
         </div>
         <div class="form-group">
           <label class="form-label">Catatan / Label (Opsional)</label>
-          <input type="text" id="backup-note" class="form-control" placeholder="Contoh: Backup Sebelum Update Skrip">
+          <input type="text" id="backup-note" class="form-control" placeholder="Contoh: Backup Sebelum Upgrade Release">
+        </div>
+        <div class="form-group" style="display: flex; flex-direction: column; gap: 0.5rem; font-size: 0.82rem; color: #cbd5e1;">
+          <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+            <input type="checkbox" id="backup-sync-s3" checked>
+            <span>Replikasi otomatis arsip ke MinIO S3 Bucket <code>backups</code></span>
+          </label>
+          <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+            <input type="checkbox" id="backup-async-mode">
+            <span>Jalankan secara Asynchronous di Background (Non-blocking instant return)</span>
+          </label>
         </div>
         <div style="display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 1.5rem;">
           <button type="button" class="btn" style="background: #334155; color: #fff;" onclick="closeCreateBackupModal()">Batal</button>
@@ -1689,9 +1713,24 @@
     async function loadBackups() {
       const tbody = document.getElementById('backup-table-body');
       try {
-        const res = await fetch('/api/v1/backups');
+        const [res, flowRes] = await Promise.all([
+          fetch('/api/v1/backups'),
+          fetch('/api/v1/backups/flow-status').catch(() => null)
+        ]);
         const json = await res.json();
         const data = json.data || [];
+
+        if (flowRes && flowRes.ok) {
+          const flowJson = await flowRes.json();
+          const s3 = flowJson.data?.minio_s3_vault || {};
+          const s3Badge = document.getElementById('s3-vault-badge');
+          if (s3Badge) {
+            s3Badge.className = s3.reachable ? 'badge badge-success' : 'badge badge-info';
+            s3Badge.innerText = s3.reachable
+              ? `☁️ MinIO S3 Active (${s3.replicated_archives_count || 0} synced)`
+              : `☁️ S3 Vault (${s3.replicated_archives_count || 0} synced)`;
+          }
+        }
 
         const countEl = document.getElementById('stat-backup-count');
         if (countEl) countEl.innerText = data.length;
@@ -1710,16 +1749,20 @@
           let dbs = '-';
           if (dbEntries.length > 0) {
             dbs = dbEntries.map(([name, info]) => {
-              const ok = info && info.status === 'ok';
-              const color = ok ? '#34d399' : '#f87171';
-              const rows = (info && info.rows !== undefined) ? ` (${info.rows} rows)` : '';
+              const ok = info && (info.status === 'ok' || info.status === 'success');
+              const skipped = info && String(info.status || '').startsWith('skipped');
+              const color = ok ? '#34d399' : (skipped ? '#fbbf24' : '#f87171');
+              const rows = (info && info.rows !== undefined) ? ` (${info.rows}r)` : '';
               return `<span style="display:inline-block; margin:2px; font-size:0.75rem; background:#0f172a; padding:2px 6px; border-radius:4px; border:1px solid #1e293b; color:${color};">${name}${rows}</span>`;
             }).join('');
           }
+          const s3Pill = b.s3_synced
+            ? `<span class="badge badge-cyan" style="font-size:0.68rem; padding:0.15rem 0.45rem; margin-left:0.35rem;">☁️ S3</span>`
+            : '';
           return `
             <tr>
               <td>
-                <b>${b.filename}</b>
+                <b>${b.filename}</b>${s3Pill}
                 ${b.note ? `<div style="font-size: 0.75rem; color: var(--text-muted);">${b.note}</div>` : ''}
               </td>
               <td><span class="badge badge-info">${b.scope}</span></td>
@@ -1751,6 +1794,8 @@
       e.preventDefault();
       const scope = document.getElementById('backup-scope').value;
       const note = document.getElementById('backup-note').value;
+      const sync_to_s3 = document.getElementById('backup-sync-s3')?.checked ?? true;
+      const async_mode = document.getElementById('backup-async-mode')?.checked ?? false;
       const btn = document.getElementById('btn-submit-backup');
       const origText = btn.innerHTML;
       btn.disabled = true;
@@ -1760,13 +1805,14 @@
         const res = await fetch('/api/v1/backups/create', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ scope, note })
+          body: JSON.stringify({ scope, note, sync_to_s3, async_mode })
         });
         const json = await res.json();
         if (res.ok) {
           closeCreateBackupModal();
           showNotification('success', json.message || 'Backup berhasil dibuat!');
           loadBackups();
+          if (async_mode) setTimeout(loadBackups, 3500);
           simulateBackupTrigger();
         } else {
           showNotification('danger', json.detail || 'Gagal membuat backup');

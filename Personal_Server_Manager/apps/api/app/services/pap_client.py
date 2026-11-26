@@ -383,6 +383,7 @@ def get_pap_hub_status(db: Session) -> Dict[str, Any]:
             "connected_projects": data.get("connected_projects", []),
             "iot_dashboard": data.get("iot_dashboard", {}),
             "personal_server_manager": data.get("personal_server_manager", {}),
+            "backup_vault": data.get("backup_vault", {}),
             "timestamp": data.get("timestamp", datetime.now(timezone.utc).isoformat()),
         }
 

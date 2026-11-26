@@ -1,0 +1,45 @@
+{
+  "backup_id": "homelab_backup_20261126_090517",
+  "version": "3.0",
+  "architecture": "Homelab Unified Central Backup",
+  "created_at": "2026-11-26T09:05:17.712805+00:00",
+  "scope": "databases",
+  "target_databases": [
+    "pap_core"
+  ],
+  "note": "Automated snapshot test",
+  "system": {
+    "host": "fa",
+    "ip_lan": "192.168.25.105",
+    "ip_tailscale": "100.78.113.53",
+    "storage_dir": "D:\\repository\\homelab\\Personal_Api_Platform\\backups"
+  },
+  "databases": {
+    "pap_core": {
+      "status": "success",
+      "method": "sqlalchemy_stream",
+      "engine": "postgresql",
+      "database": "pap_core",
+      "file": "pg_pap_core.sql",
+      "tables_count": 25,
+      "rows": 246,
+      "total_rows": 246,
+      "size_bytes": 55353
+    }
+  },
+  "configs": [],
+  "platform_coordination": {},
+  "archive": {
+    "filename": "homelab_backup_20261126_090517.tar.gz",
+    "filepath": "D:\\repository\\homelab\\Personal_Api_Platform\\backups\\homelab_backup_20261126_090517.tar.gz",
+    "size_bytes": 9036,
+    "size_human": "8.82 KB",
+    "sha256": "29da9c1dc3d781874efb57af747d5b901d869cc365d4e747592187d99c2110a7"
+  },
+  "s3_replication": {
+    "synced": false,
+    "bucket": "backups",
+    "object_key": "pap/homelab_backup_20261126_090517.tar.gz",
+    "reason": "standby_test_mode"
+  }
+}

@@ -95,15 +95,15 @@ class RequestContextAndSecurityMiddleware(BaseHTTPMiddleware):
         duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
 
         response.headers["X-Request-ID"] = validated_id
+        response.headers["X-Response-Time-Ms"] = str(duration_ms)
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["Cache-Control"] = "no-store"
 
-        # Allow iframe embedding across homelab dashboards (PSM :3005, Grafana :3001, Ingress :80)
-        # Using CSP frame-ancestors prevents browser 'ERR_BLOCKED_BY_RESPONSE' while keeping cross-site safe
+        # Allow iframe embedding across homelab dashboards (PSM :3005, Grafana :3000, Ingress :80)
         response.headers["Content-Security-Policy"] = (
             "frame-ancestors 'self' * http: https: http://localhost:* http://127.0.0.1:* "
-            "http://192.168.25.101:* http://100.106.63.90:* http://*.homelab http://*.fa.local"
+            "http://192.168.25.105:* http://100.78.113.53:* http://*.homelab http://*.tailscale.homelab http://*.fa.local"
         )
 
         logger.info(

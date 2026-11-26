@@ -167,7 +167,7 @@ class AutomationService:
             if not rule.is_enabled:
                 continue
 
-            action_result = {
+            action_detail: Dict[str, Any] = {
                 "rule_id": str(rule.id),
                 "rule_name": rule.name,
                 "action": rule.action_type,
@@ -175,7 +175,17 @@ class AutomationService:
                 "status": "executed",
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
-            actions_triggered.append(action_result)
+
+            # Coordinate real recovery job when backup failure recovery rule fires
+            if rule.action_type == "backup.retry_notify" and payload.payload.get("dispatch_async"):
+                from app.modules.backups.service import BackupService
+                job = BackupService.enqueue_backup_job(
+                    scope="all",
+                    note="Automation Engine self-healing backup retry",
+                )
+                action_detail["dispatched_job_id"] = job["job_id"]
+
+            actions_triggered.append(action_detail)
 
             log_entry = AutomationExecutionLog(
                 rule_id=rule.id,

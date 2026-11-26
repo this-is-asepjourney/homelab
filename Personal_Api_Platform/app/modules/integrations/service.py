@@ -26,7 +26,9 @@ from app.modules.iot.fleet_router import FleetService
 from app.modules.projects.models import Project
 from app.modules.projects.repository import ProjectRepository
 from app.modules.webhooks.service import WebhookService
-from app.services.bootstrap import seed_platform_registry
+from app.services.bootstrap import ensure_platform_seeded
+from app.core.hub_cache import hub_cache
+from app.modules.backups.service import BackupService
 
 
 class IntegrationService:
@@ -193,7 +195,8 @@ class IntegrationService:
     def sync_psm_state(
         self, payload: PsmSyncPayload, principal: Principal
     ) -> dict[str, Any]:
-        seed_platform_registry(self.db)
+        ensure_platform_seeded(self.db)
+        settings = get_settings()
         psm_project = self.project_repo.get_by_slug("personal-server-manager")
         if not psm_project:
             psm_project = self.project_repo.create(
@@ -230,8 +233,8 @@ class IntegrationService:
         containers = payload.containers or self.psm_adapter.DEFAULT_CONTAINERS_SNAPSHOT
 
         config_data = {
-            "base_url": get_settings().PSM_API_URL,
-            "web_url": "http://192.168.25.101:3005",
+            "base_url": settings.PSM_API_URL,
+            "web_url": f"http://{settings.SERVER_LAN_IP}:3005",
             "last_synced_at": now_iso,
             "synced_servers": len(servers),
             "synced_containers": len(containers),
@@ -257,6 +260,7 @@ class IntegrationService:
                 )
             )
 
+        hub_cache.invalidate("infra:")
         self.audit.record(
             action="psm.control_plane_synced",
             resource="integrations",
@@ -280,7 +284,7 @@ class IntegrationService:
         }
 
     def get_psm_state(self) -> dict[str, Any]:
-        seed_platform_registry(self.db)
+        ensure_platform_seeded(self.db)
         integration = self.repo.get_by_name("psm-control-plane-api")
         cfg = (integration.configuration if integration else {}) or {}
         servers = cfg.get("servers") or self.psm_adapter.DEFAULT_SERVERS_SNAPSHOT
@@ -294,19 +298,25 @@ class IntegrationService:
             "servers": servers,
             "containers": containers,
             "resources": cfg.get("resources") or {
-                "avg_cpu_percent": 24.5,
-                "avg_memory_percent": 58.2,
+                "avg_cpu_percent": 18.5,
+                "avg_memory_percent": 54.0,
                 "avg_disk_percent": 42.0,
             },
         }
 
     def get_hub_overview(self) -> dict[str, Any]:
-        seed_platform_registry(self.db)
+        ensure_platform_seeded(self.db)
         settings = get_settings()
         fleet_service = FleetService(self.db)
         iot_stats = fleet_service.get_fleet_stats()
         iot_hierarchy = fleet_service.get_hierarchy()
         psm_state = self.get_psm_state()
+        backup_vault = hub_cache.get_or_compute(
+            "hub:backup_vault",
+            BackupService.get_flow_status,
+            ttl_sec=10.0,
+            stale_ttl_sec=60.0,
+        )
 
         projects, total_projects = self.project_repo.list_projects(limit=50)
         clients, total_clients = self.client_repo.list_clients(limit=50)
@@ -316,9 +326,11 @@ class IntegrationService:
                 "name": settings.APP_NAME,
                 "version": settings.APP_VERSION,
                 "api_prefix": settings.API_PREFIX,
-                "base_url": f"http://{settings.HOST_IP}:{settings.PORT}{settings.API_PREFIX}",
+                "base_url": f"http://{settings.SERVER_LAN_IP}:{settings.PORT}{settings.API_PREFIX}",
+                "domain_url": "http://api.homelab/api/v1",
                 "status": "healthy",
                 "architecture": "Modular Monolith",
+                "responsiveness_mode": "cached_parallel_hub",
                 "projects_total": total_projects,
                 "clients_total": total_clients,
             },
@@ -344,6 +356,7 @@ class IntegrationService:
                 for c in clients
             ],
             "personal_server_manager": psm_state,
+            "backup_vault": backup_vault,
             "iot_dashboard": {
                 "project_slug": "iot-dashboard",
                 "client_id": "iot-dashboard-backend",
@@ -365,7 +378,7 @@ class IntegrationService:
             },
             "mqtt_broker": {
                 "local_host": settings.MQTT_HOST,
-                "tailscale_host": getattr(settings, "MQTT_TAILSCALE_HOST", "100.106.63.90"),
+                "tailscale_host": getattr(settings, "SERVER_TS_IP", "100.78.113.53"),
                 "port": settings.MQTT_PORT,
                 "username": settings.MQTT_USERNAME,
                 "status": "configured" if settings.MQTT_ENABLED else "disabled",

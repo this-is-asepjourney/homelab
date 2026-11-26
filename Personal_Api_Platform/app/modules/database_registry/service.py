@@ -156,18 +156,22 @@ class DatabaseRegistryService:
     # ── Database Management Registry (Architecture Roadmap Section 4.3) ───────
 
     def get_databases_registry(self, principal: Principal) -> List[Dict[str, Any]]:
-        """Returns the canonical databases registry table matching Section 4.3."""
+        """Returns the canonical Homelab databases registry table matching Section 4.3."""
+        from app.core.config import get_settings
+        settings = get_settings()
+        lan_ip = settings.SERVER_LAN_IP
         conns = self.list_connections(principal)
         items: List[Dict[str, Any]] = []
 
-        # Standard canonical entries
+        # Standard canonical Homelab entries (PostgreSQL 16 & MySQL 8.4)
         canonical = [
-            {"id": "pap_core", "database": "pap_core", "engine": "PostgreSQL", "project": "PAP", "status": "Healthy", "host": "192.168.25.105", "port": 5432},
-            {"id": "psm", "database": "psm", "engine": "PostgreSQL", "project": "PSM", "status": "Healthy", "host": "192.168.25.105", "port": 5432},
-            {"id": "nextcloud", "database": "nextcloud", "engine": "PostgreSQL", "project": "Nextcloud", "status": "Healthy", "host": "192.168.25.105", "port": 5432},
-            {"id": "fadb_pg", "database": "fadb", "engine": "PostgreSQL", "project": "Homelab Core", "status": "Healthy", "host": "192.168.25.105", "port": 5432},
-            {"id": "stock_umkm", "database": "stock_umkm", "engine": "MySQL", "project": "Stock UMKM", "status": "Healthy", "host": "192.168.25.105", "port": 3306},
-            {"id": "fadb_my", "database": "fadb", "engine": "MySQL", "project": "App Databases", "status": "Healthy", "host": "192.168.25.105", "port": 3306},
+            {"id": "pap_core", "database": "pap_core", "engine": "PostgreSQL", "project": "PAP Core", "status": "Healthy", "host": lan_ip, "port": 5432},
+            {"id": "psm", "database": "psm", "engine": "PostgreSQL", "project": "PSM Control Plane", "status": "Healthy", "host": lan_ip, "port": 5432},
+            {"id": "eternal_iot", "database": "eternal_iot", "engine": "PostgreSQL", "project": "Eternal IoT Fleet", "status": "Healthy", "host": lan_ip, "port": 5432},
+            {"id": "nextcloud", "database": "nextcloud", "engine": "PostgreSQL", "project": "Nextcloud", "status": "Healthy", "host": lan_ip, "port": 5432},
+            {"id": "fadb_pg", "database": "fadb", "engine": "PostgreSQL", "project": "Homelab Core", "status": "Healthy", "host": lan_ip, "port": 5432},
+            {"id": "stock_umkm", "database": "stock_umkm", "engine": "MySQL", "project": "Stock UMKM", "status": "Healthy", "host": lan_ip, "port": 3306},
+            {"id": "fadb_my", "database": "fadb", "engine": "MySQL", "project": "App Databases", "status": "Healthy", "host": lan_ip, "port": 3306},
         ]
 
         seen_dbs = set()
@@ -238,14 +242,24 @@ class DatabaseRegistryService:
     def trigger_database_backup(
         self, db_identifier: str, payload: DatabaseBackupTriggerRequest, principal: Principal
     ) -> Dict[str, Any]:
-        """Coordinates on-demand database backup execution."""
-        manifest = BackupService.create_backup(scope="databases", note=payload.note or f"Backup of {db_identifier}")
+        """Coordinates targeted on-demand database backup execution + S3 replication."""
+        clean_target = db_identifier.strip().lower()
+        manifest = BackupService.create_backup(
+            scope="databases",
+            note=payload.note or f"Targeted backup of {db_identifier}",
+            target_databases=[clean_target],
+            db_session=self.db,
+        )
         self.audit.record(
             action="database.backup_created",
             resource="database_backups",
             resource_id=manifest["archive"]["filename"],
             principal=principal,
-            details={"database": db_identifier, "filename": manifest["archive"]["filename"]},
+            details={
+                "database": db_identifier,
+                "filename": manifest["archive"]["filename"],
+                "s3_synced": bool(manifest.get("s3_replication", {}).get("synced")),
+            },
         )
         return {
             "database": db_identifier,
@@ -253,16 +267,23 @@ class DatabaseRegistryService:
             "filename": manifest["archive"]["filename"],
             "status": "success",
             "size_human": manifest["archive"]["size_human"],
+            "s3_synced": bool(manifest.get("s3_replication", {}).get("synced")),
             "timestamp": manifest.get("timestamp") or manifest.get("created_at") or datetime.now(timezone.utc).isoformat(),
         }
 
     def list_database_backups(self, db_identifier: str, principal: Principal) -> List[Dict[str, Any]]:
-        """Lists available backup archives for database recovery."""
+        """Lists available backup archives containing the requested database."""
+        clean = db_identifier.strip().lower()
         backups = BackupService.list_backups()
-        return [
-            b for b in backups
-            if b.get("scope") in ("all", "databases")
-        ]
+        filtered = []
+        for b in backups:
+            if b.get("scope") not in ("all", "databases", "database"):
+                continue
+            targets = [str(t).lower() for t in (b.get("target_databases") or [])]
+            dbs_in_meta = {str(k).lower() for k in (b.get("databases") or {}).keys()}
+            if not targets or clean in targets or clean in dbs_in_meta:
+                filtered.append(b)
+        return filtered
 
     def restore_database(
         self, db_identifier: str, payload: DatabaseRestoreTriggerRequest, principal: Principal

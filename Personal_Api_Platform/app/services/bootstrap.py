@@ -163,6 +163,23 @@ def _ensure_service_api_key(
     )
 
 
+_SEEDED_BIND_IDS: set[int] = set()
+
+
+def ensure_platform_seeded(db: Session) -> None:
+    """Fast-path guard for hot read endpoints: seeds once per DB engine bind."""
+    bind = db.get_bind()
+    bind_key = id(bind)
+    if bind_key in _SEEDED_BIND_IDS:
+        return
+    project_repo = ProjectRepository(db)
+    if project_repo.get_by_slug("personal-server-manager") is not None:
+        _SEEDED_BIND_IDS.add(bind_key)
+        return
+    seed_platform_registry(db)
+    _SEEDED_BIND_IDS.add(bind_key)
+
+
 def seed_platform_registry(db: Session, seed_iot_fleet: bool = True) -> dict[str, int]:
     """Idempotently seed canonical scopes, roles, and the initial homelab projects & clients."""
     settings = get_settings()

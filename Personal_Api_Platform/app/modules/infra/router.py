@@ -16,6 +16,7 @@ router = APIRouter(prefix="/infra", tags=["Infrastructure Hub"])
 
 @router.get("/overview")
 def get_infra_overview(
+    refresh: bool = False,
     principal: Principal = Depends(require_any_scope("infra:read", "server:read", "metrics:read")),
     db: Session = Depends(get_db),
 ):
@@ -24,10 +25,24 @@ def get_infra_overview(
     Combines server telemetry, Docker container health, databases, and core homelab services.
     """
     service = InfraService(db)
-    overview = service.get_overview()
+    overview = service.get_overview(force_refresh=refresh)
     return success_response(
         data=overview,
         message="Infrastructure overview retrieved successfully",
+    )
+
+
+@router.get("/central-pulse")
+def get_infra_central_pulse(
+    principal: Principal = Depends(require_any_scope("infra:read", "server:read", "metrics:read")),
+    db: Session = Depends(get_db),
+):
+    """Returns sub-millisecond Central Gateway responsiveness, service health, PSM sync & backup vault pulse."""
+    service = InfraService(db)
+    pulse = service.get_central_pulse()
+    return success_response(
+        data=pulse,
+        message="Central platform pulse retrieved successfully",
     )
 
 
