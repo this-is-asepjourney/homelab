@@ -33,9 +33,10 @@ services:
       - mysql_data:/var/lib/mysql
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p${MYSQL_ROOT_PASSWORD:-ganti_root_password_mysql}"]
-      interval: 30s
-      timeout: 5s
-      retries: 5
+      interval: 20s
+      timeout: 10s
+      retries: 6
+      start_period: 120s
     networks:
       - homelab
 
@@ -66,9 +67,10 @@ services:
       - ./postgres-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-fadb} -d ${POSTGRES_DB:-fadb}"]
-      interval: 30s
-      timeout: 5s
-      retries: 5
+      interval: 15s
+      timeout: 10s
+      retries: 6
+      start_period: 90s
     networks:
       - homelab
 
@@ -104,10 +106,10 @@ services:
       - minio_data:/data
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/minio/health/live || wget -qO- http://127.0.0.1:9000/minio/health/live || mc ready local || mcli ready local"]
-      interval: 30s
-      timeout: 5s
-      retries: 5
-      start_period: 15s
+      interval: 20s
+      timeout: 10s
+      retries: 6
+      start_period: 90s
     networks:
       homelab:
         aliases:
@@ -342,6 +344,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-wokeh123}
       IOT_POSTGRES_DB: eternal_iot
       ENABLE_MQTT_CONSUMER: "true"
+      SKIP_PSM_DB_INIT: "true"
       PSM_DATABASE_HOST: postgres
       PSM_DATABASE_PORT: 5432
       PSM_DATABASE_NAME: psm
@@ -367,10 +370,10 @@ services:
       - ./dns:/app/dns
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 5
-      start_period: 15s
+      interval: 20s
+      timeout: 10s
+      retries: 6
+      start_period: 120s
     networks:
       - homelab
 
@@ -419,11 +422,11 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - psm_storage:/opt/psm
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 5
-      start_period: 15s
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 6
+      start_period: 120s
     networks:
       homelab:
         # psm-web image bakes INTERNAL_API_URL=http://api:8000 into Next.js rewrites at build time
@@ -476,7 +479,7 @@ services:
       - psm_storage:/opt/psm
     depends_on:
       psm-api:
-        condition: service_healthy
+        condition: service_started
     networks:
       - homelab
 
@@ -499,7 +502,7 @@ services:
       NEXT_PUBLIC_WS_URL: ws://${SERVER_LAN_IP:-192.168.25.105}:8001
     depends_on:
       psm-api:
-        condition: service_healthy
+        condition: service_started
     networks:
       - homelab
 

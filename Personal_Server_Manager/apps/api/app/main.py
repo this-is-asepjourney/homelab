@@ -42,10 +42,12 @@ def init_db():
         print(f"[PSM] DB schema init notice: {e}", flush=True)
         return
 
-    # Safe column migration for existing databases
+    # Safe column migration for existing databases (inspect catalog first to avoid ACCESS EXCLUSIVE locks)
     try:
-        from sqlalchemy import text
-        with db_session.engine.connect() as conn:
+        from sqlalchemy import inspect as sa_inspect, text
+        existing_cols = {c["name"] for c in sa_inspect(db_session.engine).get_columns("projects")}
+        missing_cols = [
+            (col, col_type)
             for col, col_type in [
                 ("port_mappings", "VARCHAR(255)"),
                 ("domain", "VARCHAR(255)"),
@@ -55,25 +57,21 @@ def init_db():
                 ("maintenance_title", "VARCHAR(255)"),
                 ("maintenance_message", "TEXT"),
                 ("maintenance_eta", "VARCHAR(120)"),
-            ]:
-                try:
-                    conn.execute(text(f"ALTER TABLE projects ADD COLUMN IF NOT EXISTS {col} {col_type};"))
-                    conn.commit()
-                except Exception:
+            ]
+            if col not in existing_cols
+        ]
+        if missing_cols:
+            with db_session.engine.connect() as conn:
+                for col, col_type in missing_cols:
                     try:
-                        conn.execute(text(f"ALTER TABLE projects ADD COLUMN {col} {col_type};"))
+                        conn.execute(text(f"ALTER TABLE projects ADD COLUMN IF NOT EXISTS {col} {col_type};"))
                         conn.commit()
                     except Exception:
-                        pass
-            for idx_sql in [
-                "CREATE INDEX IF NOT EXISTS idx_server_metrics_srv_rec ON server_metrics (server_id, recorded_at DESC);",
-                "CREATE INDEX IF NOT EXISTS idx_deployment_logs_dep_seq ON deployment_logs (deployment_id, sequence ASC);",
-            ]:
-                try:
-                    conn.execute(text(idx_sql))
-                    conn.commit()
-                except Exception:
-                    pass
+                        try:
+                            conn.execute(text(f"ALTER TABLE projects ADD COLUMN {col} {col_type};"))
+                            conn.commit()
+                        except Exception:
+                            pass
     except Exception:
         pass
     db = db_session.SessionLocal()
@@ -222,15 +220,56 @@ def init_db():
         db.close()
 
 
-async def _startup_sync_project_domains() -> None:
+def _run_post_startup_db_maintenance_sync() -> None:
+    """
+    Prune expired historical metrics FIRST, then ensure composite indexes in the background
+    after Uvicorn is already serving `/health` so large tables never cause container healthcheck timeouts.
+    """
+    from datetime import datetime, timezone, timedelta
+    from sqlalchemy import text
+
+    db = db_session.SessionLocal()
+    try:
+        retention_hours = max(6, int(os.getenv("METRICS_RETENTION_HOURS", "48")))
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=retention_hours)
+        db.query(ServerMetric).filter(ServerMetric.recorded_at < cutoff).delete(synchronize_session=False)
+        db.commit()
+    except Exception:
+        db.rollback()
+    finally:
+        db.close()
+
+    try:
+        with db_session.engine.connect() as conn:
+            for idx_sql in [
+                "CREATE INDEX IF NOT EXISTS idx_server_metrics_srv_rec ON server_metrics (server_id, recorded_at DESC);",
+                "CREATE INDEX IF NOT EXISTS idx_deployment_logs_dep_seq ON deployment_logs (deployment_id, sequence ASC);",
+            ]:
+                try:
+                    conn.execute(text(idx_sql))
+                    conn.commit()
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+
+async def _startup_background_tasks() -> None:
     import asyncio
     from apps.api.app.services.pap_client import sync_all_project_domains
 
-    for delay in (3, 5, 5):
+    # Let Uvicorn bind port 8000 and answer Docker healthcheck immediately first
+    await asyncio.sleep(3)
+    try:
+        await asyncio.to_thread(_run_post_startup_db_maintenance_sync)
+    except Exception:
+        pass
+
+    for delay in (2, 5, 5):
         await asyncio.sleep(delay)
         db = db_session.SessionLocal()
         try:
-            res = sync_all_project_domains(db)
+            res = await asyncio.to_thread(sync_all_project_domains, db)
             if res.get("total", 0) == 0 or res.get("synced", 0) > 0:
                 return
         except Exception:
@@ -242,15 +281,15 @@ async def _startup_sync_project_domains() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     import asyncio
-    # Startup
-    init_db()
-    sync_task = None
+    # Fast schema & seed check (<1s when DB is warm)
+    await asyncio.to_thread(init_db)
+    bg_task = None
     if os.getenv("TESTING") != "true":
-        sync_task = asyncio.create_task(_startup_sync_project_domains())
+        bg_task = asyncio.create_task(_startup_background_tasks())
     yield
     # Shutdown
-    if sync_task and not sync_task.done():
-        sync_task.cancel()
+    if bg_task and not bg_task.done():
+        bg_task.cancel()
 
 app = FastAPI(
     title=settings.PROJECT_NAME,

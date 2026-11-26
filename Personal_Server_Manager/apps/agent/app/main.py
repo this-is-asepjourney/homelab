@@ -40,8 +40,8 @@ async def register_agent(http_client: httpx.AsyncClient):
         "architecture": sys_info["architecture"],
         "hostname": sys_info["hostname"]
     }
-    for attempt in range(1, 6):
-        logger.info(f"Registering with Control Plane at {url} (attempt {attempt})...")
+    for attempt in range(1, 21):
+        logger.info(f"Registering with Control Plane at {url} (attempt {attempt}/20)...")
         try:
             res = await http_client.post(url, json=payload, timeout=10)
             if res.status_code == 200:

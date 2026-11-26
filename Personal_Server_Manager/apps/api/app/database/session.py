@@ -29,9 +29,9 @@ ACTIVE_PSM_DB_INFO: Dict[str, Any] = {
 
 def _auto_ensure_psm_postgres_db(url: str) -> str:
     """
-    Automatically connect to the configured PostgreSQL server
-    (POSTGRES_HOST=100.106.63.90, POSTGRES_PORT=5432, POSTGRES_USER=appuser, POSTGRES_DB=psm)
-    and automatically create the 'psm' database if it does not exist yet.
+    Connect to the configured PostgreSQL server and ensure the 'psm' database exists.
+    Uses fast, targeted connection attempts when explicit credentials are provided
+    to avoid slow multi-host/multi-password timeouts during cold container boot.
     """
     if not url.startswith("postgres"):
         return url
@@ -41,32 +41,40 @@ def _auto_ensure_psm_postgres_db(url: str) -> str:
         norm = url.replace("postgresql+psycopg2://", "postgresql://").replace("postgresql+psycopg://", "postgresql://")
         u = urlparse(norm)
 
+        explicit_env_creds = bool(os.getenv("POSTGRES_USER") and os.getenv("POSTGRES_PASSWORD"))
         target_user = os.getenv("POSTGRES_USER") or u.username or "appuser"
         target_pass = os.getenv("POSTGRES_PASSWORD") or u.password or "admin12345"
-        target_host = os.getenv("POSTGRES_HOST") or u.hostname or "100.106.63.90"
+        target_host = os.getenv("POSTGRES_HOST") or u.hostname or "postgres"
         target_port = int(os.getenv("POSTGRES_PORT") or u.port or 5432)
         target_db = os.getenv("POSTGRES_DB") or (u.path.lstrip("/") if u.path else "psm") or "psm"
         clean_db = re.sub(r"[^a-zA-Z0-9_]", "_", target_db)
 
-        candidate_hosts = []
-        for h in [target_host, "host.docker.internal", "postgres", "psm-postgres", "127.0.0.1"]:
-            if h and h not in candidate_hosts:
-                candidate_hosts.append(h)
-
-        candidate_creds = []
-        for cred in [
-            (target_user, target_pass),
-            ("appuser", "admin12345"),
-            ("appuser", "admn12345"),
-            ("postgres", target_pass),
-            ("postgres", "admin12345"),
-            ("psm", "psm_super_secret_password_change_in_production"),
-        ]:
-            if cred not in candidate_creds:
-                candidate_creds.append(cred)
+        if explicit_env_creds:
+            candidate_hosts = [target_host]
+            if "postgres" not in candidate_hosts:
+                candidate_hosts.append("postgres")
+            candidate_creds = [(target_user, target_pass)]
+            if target_user != "postgres":
+                candidate_creds.append(("postgres", target_pass))
+            maint_dbs = ("postgres", "template1")
+        else:
+            candidate_hosts = []
+            for h in [target_host, "postgres", "host.docker.internal", "127.0.0.1"]:
+                if h and h not in candidate_hosts:
+                    candidate_hosts.append(h)
+            candidate_creds = []
+            for cred in [
+                (target_user, target_pass),
+                ("fadb", "wokeh123"),
+                ("appuser", "admin12345"),
+                ("postgres", target_pass),
+                ("psm", "psm_super_secret_password_change_in_production"),
+            ]:
+                if cred not in candidate_creds:
+                    candidate_creds.append(cred)
+            maint_dbs = ("postgres", "template1", "psm")
 
         for host in candidate_hosts:
-            # Fast TCP reachability check
             try:
                 with socket.create_connection((host, target_port), timeout=1.5):
                     pass
@@ -80,22 +88,6 @@ def _auto_ensure_psm_postgres_db(url: str) -> str:
                         host=host, port=target_port, user=user, password=pw, dbname=clean_db, connect_timeout=3
                     )
                     c.autocommit = True
-                    # If connected as superuser 'psm' or 'postgres', ensure desired 'appuser' role exists too
-                    if user != target_user:
-                        try:
-                            cur = c.cursor()
-                            cur.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (target_user,))
-                            if not cur.fetchone():
-                                cur.execute(
-                                    f'CREATE ROLE "{target_user}" WITH LOGIN SUPERUSER CREATEDB PASSWORD %s',
-                                    (target_pass,),
-                                )
-                            cur.execute(f'GRANT ALL PRIVILEGES ON DATABASE "{clean_db}" TO "{target_user}"')
-                            cur.close()
-                            user = target_user
-                            pw = target_pass
-                        except Exception:
-                            pass
                     c.close()
                     ACTIVE_PSM_DB_INFO.update({
                         "engine": "postgresql",
@@ -111,11 +103,13 @@ def _auto_ensure_psm_postgres_db(url: str) -> str:
                         flush=True,
                     )
                     return f"postgresql+psycopg2://{user}:{pw}@{host}:{target_port}/{clean_db}"
-                except Exception:
-                    pass
+                except Exception as direct_err:
+                    # If authentication failed on explicit user, don't waste time probing maintenance DBs with same user
+                    if "password authentication failed" in str(direct_err).lower():
+                        continue
 
-                # 2. Database 'psm' does not exist yet -> connect to maintenance DB ('postgres', 'appdb', 'template1', 'psm') and auto-create 'psm'
-                for maint_db in ("postgres", "appdb", "template1", "psm"):
+                # 2. Database 'psm' may not exist yet -> connect to maintenance DB and auto-create 'psm'
+                for maint_db in maint_dbs:
                     try:
                         c = psycopg2.connect(
                             host=host, port=target_port, user=user, password=pw, dbname=maint_db, connect_timeout=3
@@ -123,40 +117,15 @@ def _auto_ensure_psm_postgres_db(url: str) -> str:
                         c.autocommit = True
                         cur = c.cursor()
 
-                        # Ensure target_user role exists if connected as superuser
-                        eff_user = user
-                        eff_pw = pw
-                        if user != target_user:
-                            try:
-                                cur.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (target_user,))
-                                if not cur.fetchone():
-                                    cur.execute(
-                                        f'CREATE ROLE "{target_user}" WITH LOGIN SUPERUSER CREATEDB PASSWORD %s',
-                                        (target_pass,),
-                                    )
-                                eff_user = target_user
-                                eff_pw = target_pass
-                            except Exception:
-                                pass
-
                         cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (clean_db,))
                         created_now = False
                         if not cur.fetchone():
                             print(
-                                f"[PSM Database] Database '{clean_db}' not found on {host}:{target_port} — automatically creating database '{clean_db}'...",
+                                f"[PSM Database] Database '{clean_db}' not found on {host}:{target_port} — automatically creating...",
                                 flush=True,
                             )
-                            cur.execute(f'CREATE DATABASE "{clean_db}" OWNER "{eff_user}" ENCODING \'UTF8\'')
+                            cur.execute(f'CREATE DATABASE "{clean_db}" OWNER "{user}" ENCODING \'UTF8\'')
                             created_now = True
-                            print(
-                                f"[PSM Database] Database '{clean_db}' successfully created on {host}:{target_port} (owner: {eff_user})!",
-                                flush=True,
-                            )
-
-                        try:
-                            cur.execute(f'GRANT ALL PRIVILEGES ON DATABASE "{clean_db}" TO "{eff_user}"')
-                        except Exception:
-                            pass
 
                         cur.close()
                         c.close()
@@ -165,12 +134,12 @@ def _auto_ensure_psm_postgres_db(url: str) -> str:
                             "engine": "postgresql",
                             "host": host,
                             "port": target_port,
-                            "user": eff_user,
+                            "user": user,
                             "db_name": clean_db,
                             "auto_created": created_now,
                             "connected": True,
                         })
-                        return f"postgresql+psycopg2://{eff_user}:{eff_pw}@{host}:{target_port}/{clean_db}"
+                        return f"postgresql+psycopg2://{user}:{pw}@{host}:{target_port}/{clean_db}"
                     except Exception:
                         continue
     except Exception as e:
@@ -179,7 +148,9 @@ def _auto_ensure_psm_postgres_db(url: str) -> str:
     return url
 
 
-db_url = _auto_ensure_psm_postgres_db(db_url)
+# Skip eager network connections at import time during unit tests
+if os.getenv("TESTING") != "true" and not db_url.startswith("sqlite"):
+    db_url = _auto_ensure_psm_postgres_db(db_url)
 
 # Configure engine. For SQLite, need check_same_thread=False
 connect_args = {}

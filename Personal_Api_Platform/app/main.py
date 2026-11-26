@@ -94,8 +94,9 @@ async def _lifespan(application: FastAPI):
     except Exception as e:
         print(f"[PAP Core] Startup notice: {e}")
 
-    # 2. Initialize PSM Database (auto-creates 'psm' PostgreSQL db and seeds homelab)
-    if HAS_PSM_DIRECT and init_psm_db:
+    # 2. Initialize PSM Database only when not already managed by a dedicated psm-api service
+    skip_psm_init = os.getenv("SKIP_PSM_DB_INIT", "false").lower() in ("true", "1", "yes")
+    if HAS_PSM_DIRECT and init_psm_db and not skip_psm_init:
         try:
             init_psm_db()
             print("[PAP Core] PSM Control Plane database & schema ready.")
