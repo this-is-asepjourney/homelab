@@ -1,0 +1,7 @@
+{
+  "python.defaultInterpreterPath": "C:\\Users\\PKIG\\miniconda3\\python.exe",
+  "python.analysis.extraPaths": [
+    "${workspaceFolder}/Personal_Server_Manager",
+    "${workspaceFolder}/Personal_Api_Platform"
+  ]
+}

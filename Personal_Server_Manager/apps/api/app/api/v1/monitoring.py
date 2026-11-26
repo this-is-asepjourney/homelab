@@ -2,6 +2,7 @@ import json
 import os
 import re
 import socket
+import subprocess
 import time
 import urllib.request
 import urllib.error
@@ -18,18 +19,24 @@ from apps.api.app.models.entities import (
     Container,
     Volume,
     DockerNetwork,
+    DockerImage,
     ServerMetric,
     Deployment,
     Project,
+    EnvironmentVariable,
     User,
 )
 from apps.api.app.api.v1.servers import compute_server_status
 from apps.api.app.api.v1.agents import LATEST_TELEMETRY, NET_HISTORY_BUFFER
+from apps.api.app.services.alert_service import load_notification_settings
 from apps.api.app.services.pap_client import extract_host_port, resolve_effective_domain
+from apps.api.app.core.security import decrypt_secret
 
 router = APIRouter(prefix="/monitoring", tags=["Monitoring Center"])
 
 PROMETHEUS_CONFIG_FILE = os.path.join(settings.STORAGE_BASE_DIR, "prometheus_settings.json")
+S3_BUCKETS_REGISTRY_FILE = os.path.join(settings.STORAGE_BASE_DIR, "s3_buckets_registry.json")
+_MINIO_STATUS_CACHE: Dict[str, Any] = {"expires_at": 0.0, "data": None}
 
 
 class PrometheusConfigUpdate(BaseModel):
@@ -39,6 +46,51 @@ class PrometheusConfigUpdate(BaseModel):
 class NetworkProbeRequest(BaseModel):
     target: str
     port: Optional[int] = None
+
+
+class S3BucketCreateRequest(BaseModel):
+    bucket_name: str
+    public_read: bool = True
+
+
+HOMELAB_ECOSYSTEM_CATALOG: List[Dict[str, Any]] = [
+    # Core Databases
+    {"key": "postgres", "label": "PostgreSQL 16 Core", "category": "databases", "port": 5432, "domain": "postgres:5432", "aliases": ["postgres", "homelab_postgres", "homelab-postgres"], "prom_job": None},
+    {"key": "mysql", "label": "MySQL 8.4 Shared", "category": "databases", "port": 3307, "domain": "mysql:3306", "aliases": ["mysql", "homelab_mysql", "homelab-mysql"], "prom_job": None},
+    {"key": "redis", "label": "Redis 7 Cache & Queue", "category": "databases", "port": 6379, "domain": "redis:6379", "aliases": ["redis", "homelab_redis", "homelab-redis"], "prom_job": None},
+    # Platform & Ingress
+    {"key": "pap-api", "label": "Personal API Platform", "category": "platform", "port": 8000, "domain": "api.homelab", "aliases": ["pap-api", "homelab_pap_api", "pap_api"], "prom_job": "pap-core"},
+    {"key": "psm-api", "label": "PSM Control Plane API", "category": "platform", "port": 8001, "domain": "psm-api.homelab", "aliases": ["psm-api", "homelab_psm_api", "psm_api"], "prom_job": "psm-api"},
+    {"key": "psm-agent", "label": "PSM Host Agent", "category": "platform", "port": 0, "domain": "internal", "aliases": ["psm-agent", "homelab_psm_agent", "psm_agent"], "prom_job": None},
+    {"key": "psm-web", "label": "PSM Web Console", "category": "platform", "port": 3005, "domain": "psm.homelab", "aliases": ["psm-web", "homelab_psm_web", "psm_web"], "prom_job": None},
+    {"key": "homelab-router", "label": "Nginx Ingress Router", "category": "platform", "port": 80, "domain": "*.homelab", "aliases": ["homelab-router", "homelab_router", "router"], "prom_job": None},
+    {"key": "homelab-dns", "label": "CoreDNS Local Resolver", "category": "platform", "port": 53, "domain": "dns.homelab", "aliases": ["homelab-dns", "homelab_dns", "coredns"], "prom_job": None},
+    # Cloud & Object Storage
+    {"key": "minio", "label": "MinIO / Silo S3 Storage", "category": "storage_cloud", "port": 9002, "domain": "minio.homelab", "aliases": ["minio", "homelab_minio", "homelab-minio", "silo"], "prom_job": None},
+    {"key": "nextcloud", "label": "Nextcloud Personal Cloud", "category": "storage_cloud", "port": 8082, "domain": "cloud.homelab", "aliases": ["nextcloud", "homelab_nextcloud", "homelab-nextcloud"], "prom_job": None},
+    # Observability Stack
+    {"key": "prometheus", "label": "Prometheus TSDB", "category": "observability", "port": 9090, "domain": "prometheus.homelab", "aliases": ["prometheus", "homelab_prometheus"], "prom_job": "prometheus"},
+    {"key": "grafana", "label": "Grafana Dashboards", "category": "observability", "port": 3000, "domain": "grafana.homelab", "aliases": ["grafana", "homelab_grafana"], "prom_job": None},
+    {"key": "cadvisor", "label": "cAdvisor Container Stats", "category": "observability", "port": 8081, "domain": "cadvisor.homelab", "aliases": ["cadvisor", "homelab_cadvisor"], "prom_job": "cadvisor"},
+    {"key": "uptime-kuma", "label": "Uptime Kuma Monitor", "category": "observability", "port": 3001, "domain": "status.homelab", "aliases": ["uptime-kuma", "homelab_uptime_kuma", "uptime_kuma"], "prom_job": None},
+    {"key": "node-exporter", "label": "Host Node Exporter", "category": "observability", "port": 9100, "domain": "node-exporter:9100", "aliases": ["node-exporter", "homelab_node_exporter", "node_exporter"], "prom_job": "node"},
+    # Eternal IoT Pipeline
+    {"key": "mosquitto", "label": "Mosquitto MQTT Broker", "category": "iot_pipeline", "port": 1883, "domain": "mqtt.homelab", "aliases": ["mosquitto", "homelab_mosquitto"], "prom_job": None},
+    {"key": "telegraf", "label": "Telegraf IoT Collector", "category": "iot_pipeline", "port": 9273, "domain": "telegraf:9273", "aliases": ["telegraf", "homelab_telegraf"], "prom_job": "telegraf"},
+]
+
+HOMELAB_VOLUME_ROLES: Dict[str, Tuple[List[str], str]] = {
+    "postgres_data": (["postgres", "homelab_postgres"], "PostgreSQL 16 Databases (psm, pap_core, eternal_iot)"),
+    "mysql_data": (["mysql", "homelab_mysql"], "MySQL 8.4 Databases (fadb, stock_umkm)"),
+    "redis_data": (["redis", "homelab_redis"], "Redis 7 AOF Cache & Message Broker"),
+    "minio_data": (["minio", "homelab_minio", "silo"], "MinIO / Silo S3 Object Storage Buckets"),
+    "nextcloud_data": (["nextcloud", "homelab_nextcloud"], "Nextcloud Personal Cloud User Files"),
+    "prometheus_data": (["prometheus", "homelab_prometheus"], "Prometheus 15-Day Metrics TSDB"),
+    "grafana_data": (["grafana", "homelab_grafana"], "Grafana Dashboards & Provisioned State"),
+    "uptime_kuma_data": (["uptime-kuma", "homelab_uptime_kuma"], "Uptime Kuma Monitors & SQLite History"),
+    "mosquitto_data": (["mosquitto", "homelab_mosquitto"], "Mosquitto MQTT Persistent Queue"),
+    "psm_storage": (["psm-api", "psm-agent", "homelab_psm_api", "homelab_psm_agent"], "PSM Workspaces, Releases, Uploads & Backups"),
+}
 
 
 def _get_live_or_cached_telemetry(server_id: str) -> Dict[str, Any]:
@@ -187,17 +239,23 @@ def update_prometheus_config(
 
 @router.get("/prometheus/metrics")
 def export_prometheus_metrics(db: Session = Depends(get_db)):
-    """Expose OpenMetrics / Prometheus text format for Prometheus Snap to scrape."""
+    """Expose OpenMetrics / Prometheus text format for Homelab Prometheus (:9090) to scrape."""
     servers = db.query(Server).all()
     lines = [
         "# HELP psm_server_online Whether the managed server is online (1) or offline (0)",
         "# TYPE psm_server_online gauge",
         "# HELP psm_cpu_usage_percent Host CPU utilization percentage",
         "# TYPE psm_cpu_usage_percent gauge",
+        "# HELP psm_load_avg_1m Host 1-minute load average",
+        "# TYPE psm_load_avg_1m gauge",
         "# HELP psm_memory_usage_percent Host RAM utilization percentage",
         "# TYPE psm_memory_usage_percent gauge",
         "# HELP psm_memory_used_bytes Host RAM used in bytes",
         "# TYPE psm_memory_used_bytes gauge",
+        "# HELP psm_swap_used_bytes Host Swap used in bytes",
+        "# TYPE psm_swap_used_bytes gauge",
+        "# HELP psm_swap_total_bytes Host Swap total capacity in bytes",
+        "# TYPE psm_swap_total_bytes gauge",
         "# HELP psm_disk_usage_percent Primary disk utilization percentage",
         "# TYPE psm_disk_usage_percent gauge",
         "# HELP psm_disk_used_bytes Primary disk used space in bytes",
@@ -228,21 +286,28 @@ def export_prometheus_metrics(db: Session = Depends(get_db)):
         )
         tele = _get_live_or_cached_telemetry(s.id)
 
-        cpu = latest.cpu_usage if latest else tele.get("cpu_usage", 0.0)
-        mem = latest.memory_usage if latest else tele.get("memory_usage", 0.0)
-        mem_used = latest.memory_used_bytes if latest else tele.get("memory_used_bytes", 0)
-        disk = latest.disk_usage if latest else tele.get("disk_usage", 0.0)
-        disk_used = latest.disk_used_bytes if latest else tele.get("disk_used_bytes", 0)
-        disk_total = latest.disk_total_bytes if latest else tele.get("disk_total_bytes", 0)
+        cpu = tele.get("cpu_usage") if tele.get("cpu_usage") is not None else (latest.cpu_usage if latest else 0.0)
+        load_list = tele.get("load_avg") or [0.0, 0.0, 0.0]
+        load_1m = float(load_list[0]) if isinstance(load_list, list) and load_list else 0.0
+        mem = tele.get("memory_usage") if tele.get("memory_usage") is not None else (latest.memory_usage if latest else 0.0)
+        mem_used = tele.get("memory_used_bytes") or (latest.memory_used_bytes if latest else 0)
+        swap_used = tele.get("swap_used_bytes", 0) or 0
+        swap_total = tele.get("swap_total_bytes", 0) or 0
+        disk = tele.get("disk_usage") if tele.get("disk_usage") is not None else (latest.disk_usage if latest else 0.0)
+        disk_used = tele.get("disk_used_bytes") or (latest.disk_used_bytes if latest else 0)
+        disk_total = tele.get("disk_total_bytes") or (latest.disk_total_bytes if latest else 0)
         disk_free = tele.get("disk_free_bytes", max(0, disk_total - disk_used))
         d_read = tele.get("disk_read_bytes_per_sec", 0.0)
         d_write = tele.get("disk_write_bytes_per_sec", 0.0)
-        net_rx = latest.network_rx if latest else tele.get("network_rx", 0.0)
-        net_tx = latest.network_tx if latest else tele.get("network_tx", 0.0)
+        net_rx = tele.get("network_rx") if tele.get("network_rx") is not None else (latest.network_rx if latest else 0.0)
+        net_tx = tele.get("network_tx") if tele.get("network_tx") is not None else (latest.network_tx if latest else 0.0)
 
         lines.append(f"psm_cpu_usage_percent{{{labels}}} {cpu}")
+        lines.append(f"psm_load_avg_1m{{{labels}}} {load_1m}")
         lines.append(f"psm_memory_usage_percent{{{labels}}} {mem}")
         lines.append(f"psm_memory_used_bytes{{{labels}}} {mem_used}")
+        lines.append(f"psm_swap_used_bytes{{{labels}}} {swap_used}")
+        lines.append(f"psm_swap_total_bytes{{{labels}}} {swap_total}")
         lines.append(f"psm_disk_usage_percent{{{labels}}} {disk}")
         lines.append(f"psm_disk_used_bytes{{{labels}}} {disk_used}")
         lines.append(f"psm_disk_free_bytes{{{labels}}} {disk_free}")
@@ -263,6 +328,66 @@ def export_prometheus_metrics(db: Session = Depends(get_db)):
     return Response(content="\n".join(lines) + "\n", media_type="text/plain; version=0.0.4")
 
 
+def _parse_size_string_to_bytes(raw: str) -> int:
+    if not raw:
+        return 0
+    m = re.match(r"^\s*([0-9]+(?:\.[0-9]+)?)\s*([A-Za-z]+)\s*$", raw.strip())
+    if not m:
+        return 0
+    val = float(m.group(1))
+    unit = m.group(2).upper()
+    mult = {
+        "B": 1,
+        "KB": 1000,
+        "KIB": 1024,
+        "MB": 1000**2,
+        "MIB": 1024**2,
+        "GB": 1000**3,
+        "GIB": 1024**3,
+        "TB": 1000**4,
+        "TIB": 1024**4,
+    }.get(unit, 1)
+    return int(val * mult)
+
+
+def _normalize_container_stats(raw_stats: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    normalized: List[Dict[str, Any]] = []
+    for item in raw_stats or []:
+        cname = str(item.get("name") or "").strip()
+        if not cname:
+            continue
+        cpu_str = str(item.get("cpu_percent") or "0%").replace("%", "").strip()
+        try:
+            cpu_val = round(float(cpu_str), 2)
+        except ValueError:
+            cpu_val = 0.0
+
+        mem_pct_str = str(item.get("mem_percent") or "0%").replace("%", "").strip()
+        try:
+            mem_pct_val = round(float(mem_pct_str), 2)
+        except ValueError:
+            mem_pct_val = 0.0
+
+        mem_usage_raw = str(item.get("mem_usage") or "0B / 0B")
+        parts = [p.strip() for p in mem_usage_raw.split("/")]
+        mem_used_b = _parse_size_string_to_bytes(parts[0]) if parts else 0
+        mem_limit_b = _parse_size_string_to_bytes(parts[1]) if len(parts) > 1 else 0
+
+        normalized.append({
+            "id": item.get("id", ""),
+            "name": cname,
+            "cpu_percent": cpu_val,
+            "mem_percent": mem_pct_val,
+            "mem_used_bytes": mem_used_b,
+            "mem_limit_bytes": mem_limit_b,
+            "mem_usage": mem_usage_raw,
+            "net_io": item.get("net_io", "0B / 0B"),
+            "block_io": item.get("block_io", "0B / 0B"),
+        })
+    normalized.sort(key=lambda x: (x["cpu_percent"], x["mem_used_bytes"]), reverse=True)
+    return normalized
+
+
 @router.get("/overview")
 def get_monitoring_overview(
     current_user: User = Depends(get_current_user),
@@ -278,14 +403,31 @@ def get_monitoring_overview(
     mem_sum = 0.0
     disk_sum = 0.0
     mem_used_total = 0
+    mem_avail_total = 0
     mem_cap_total = 0
+    swap_used_total = 0
+    swap_cap_total = 0
     disk_used_total = 0
     disk_cap_total = 0
+    net_rx_total = 0.0
+    net_tx_total = 0.0
+    disk_read_total = 0.0
+    disk_write_total = 0.0
+    primary_load_avg: List[float] = [0.0, 0.0, 0.0]
+    primary_cpu_cores = 1
+    primary_uptime = 0
     active_metrics_count = 0
 
-    alerts = []
+    notif_cfg = load_notification_settings()
+    cpu_thresh = float(notif_cfg.get("cpu_threshold", 90.0))
+    mem_thresh = float(notif_cfg.get("memory_threshold", 90.0))
+    disk_thresh = float(notif_cfg.get("disk_threshold", 90.0))
 
-    for s in servers:
+    alerts = []
+    primary_server = servers[0] if servers else None
+    primary_tele: Dict[str, Any] = {}
+
+    for idx, s in enumerate(servers):
         st = compute_server_status(s)
         if st == "online":
             online_count += 1
@@ -308,42 +450,83 @@ def get_monitoring_overview(
             .order_by(ServerMetric.recorded_at.desc())
             .first()
         )
+        live_tele = LATEST_TELEMETRY.get(s.id) or ({} if idx > 0 else _get_live_or_cached_telemetry(s.id))
+        if idx == 0:
+            primary_tele = live_tele
 
-        if latest_metric:
-            cpu_sum += latest_metric.cpu_usage
-            mem_sum += latest_metric.memory_usage
-            disk_sum += latest_metric.disk_usage
-            mem_used_total += latest_metric.memory_used_bytes or 0
-            mem_cap_total += latest_metric.memory_total_bytes or 0
-            disk_used_total += latest_metric.disk_used_bytes or 0
-            disk_cap_total += latest_metric.disk_total_bytes or 0
+        has_live = bool(live_tele and (live_tele.get("cpu_usage") is not None or live_tele.get("memory_total_bytes")))
+        if has_live or latest_metric:
+            c_val = float(live_tele.get("cpu_usage")) if live_tele.get("cpu_usage") is not None else (latest_metric.cpu_usage if latest_metric else 0.0)
+            m_val = float(live_tele.get("memory_usage")) if live_tele.get("memory_usage") is not None else (latest_metric.memory_usage if latest_metric else 0.0)
+            d_val = float(live_tele.get("disk_usage")) if live_tele.get("disk_usage") is not None else (latest_metric.disk_usage if latest_metric else 0.0)
+            m_used = int(live_tele.get("memory_used_bytes") or (latest_metric.memory_used_bytes if latest_metric else 0) or 0)
+            m_cap = int(live_tele.get("memory_total_bytes") or (latest_metric.memory_total_bytes if latest_metric else 0) or 0)
+            m_avail = int(live_tele.get("memory_available_bytes") or max(0, m_cap - m_used))
+            sw_used = int(live_tele.get("swap_used_bytes") or live_tele.get("swap_used") or 0)
+            sw_cap = int(live_tele.get("swap_total_bytes") or live_tele.get("swap_total") or 0)
+            d_used = int(live_tele.get("disk_used_bytes") or (latest_metric.disk_used_bytes if latest_metric else 0) or 0)
+            d_cap = int(live_tele.get("disk_total_bytes") or (latest_metric.disk_total_bytes if latest_metric else 0) or 0)
+
+            cpu_sum += c_val
+            mem_sum += m_val
+            disk_sum += d_val
+            mem_used_total += m_used
+            mem_avail_total += m_avail
+            mem_cap_total += m_cap
+            swap_used_total += sw_used
+            swap_cap_total += sw_cap
+            disk_used_total += d_used
+            disk_cap_total += d_cap
+            net_rx_total += float(live_tele.get("network_rx") or live_tele.get("network_rx_bytes_per_sec") or (latest_metric.network_rx if latest_metric else 0.0) or 0.0)
+            net_tx_total += float(live_tele.get("network_tx") or live_tele.get("network_tx_bytes_per_sec") or (latest_metric.network_tx if latest_metric else 0.0) or 0.0)
+            disk_read_total += float(live_tele.get("disk_read_bytes_per_sec") or 0.0)
+            disk_write_total += float(live_tele.get("disk_write_bytes_per_sec") or 0.0)
             active_metrics_count += 1
 
-            if latest_metric.cpu_usage > 90.0:
+            if idx == 0:
+                raw_load = live_tele.get("load_avg")
+                if isinstance(raw_load, list) and len(raw_load) >= 3:
+                    primary_load_avg = [round(float(x), 2) for x in raw_load[:3]]
+                primary_cpu_cores = int(live_tele.get("cpu_cores") or 1)
+                primary_uptime = int(live_tele.get("uptime") or live_tele.get("uptime_seconds") or (latest_metric.uptime if latest_metric else 0) or 0)
+
+            rec_ts = live_tele.get("recorded_at") or (latest_metric.recorded_at.isoformat() if latest_metric else datetime.now(timezone.utc).isoformat())
+            if c_val >= cpu_thresh:
                 alerts.append({
                     "id": f"alert-cpu-{s.id}",
                     "level": "critical",
                     "title": f"High CPU usage on {s.name}",
-                    "description": f"CPU usage exceeded 90% ({latest_metric.cpu_usage:.1f}%)",
+                    "description": f"CPU usage reached {c_val:.1f}% (threshold: {cpu_thresh:.0f}%)",
                     "server_id": s.id,
-                    "timestamp": latest_metric.recorded_at.isoformat(),
+                    "timestamp": rec_ts,
                 })
-            if latest_metric.memory_usage > 90.0:
+            if m_val >= mem_thresh:
                 alerts.append({
                     "id": f"alert-mem-{s.id}",
                     "level": "critical",
-                    "title": f"High Memory usage on {s.name}",
-                    "description": f"Memory usage exceeded 90% ({latest_metric.memory_usage:.1f}%)",
+                    "title": f"High RAM usage on {s.name}",
+                    "description": f"RAM usage reached {m_val:.1f}% (threshold: {mem_thresh:.0f}%)",
                     "server_id": s.id,
-                    "timestamp": latest_metric.recorded_at.isoformat(),
+                    "timestamp": rec_ts,
+                })
+            if d_val >= disk_thresh:
+                alerts.append({
+                    "id": f"alert-disk-{s.id}",
+                    "level": "warning",
+                    "title": f"High Disk usage on {s.name}",
+                    "description": f"Root disk usage reached {d_val:.1f}% (threshold: {disk_thresh:.0f}%)",
+                    "server_id": s.id,
+                    "timestamp": rec_ts,
                 })
 
     avg_cpu = (cpu_sum / active_metrics_count) if active_metrics_count > 0 else 0.0
     avg_mem = (mem_sum / active_metrics_count) if active_metrics_count > 0 else 0.0
     avg_disk = (disk_sum / active_metrics_count) if active_metrics_count > 0 else 0.0
+    swap_percent = round((swap_used_total / swap_cap_total) * 100.0, 1) if swap_cap_total > 0 else 0.0
 
-    total_containers = db.query(Container).count()
-    running_containers = db.query(Container).filter(Container.status == "running").count()
+    all_containers = db.query(Container).all()
+    total_containers = len(all_containers)
+    running_containers = sum(1 for c in all_containers if c.status == "running")
 
     recent_deployments = (
         db.query(Deployment).order_by(Deployment.created_at.desc()).limit(5).all()
@@ -351,8 +534,101 @@ def get_monitoring_overview(
 
     prom_cfg = load_prometheus_config()
     prom_status = probe_prometheus_instance(prom_cfg["prometheus_url"])
+    prom_jobs_up = {
+        str(t.get("job") or "").lower()
+        for t in (prom_status.get("active_targets") or [])
+        if t.get("health") == "up"
+    }
+
+    # Build Homelab 18-Service Ecosystem Health Matrix
+    container_by_clean_name: Dict[str, Container] = {}
+    for c in all_containers:
+        clean_n = c.name.strip().lstrip("/").lower()
+        container_by_clean_name[clean_n] = c
+
+    ecosystem_items: List[Dict[str, Any]] = []
+    running_eco_count = 0
+    for svc in HOMELAB_ECOSYSTEM_CATALOG:
+        matched_c: Optional[Container] = None
+        for alias in svc["aliases"]:
+            a_low = alias.lower()
+            if a_low in container_by_clean_name:
+                matched_c = container_by_clean_name[a_low]
+                break
+            for cname, cobj in container_by_clean_name.items():
+                if cname == a_low or cname.endswith(f"_{a_low}") or cname.endswith(f"-{a_low}"):
+                    matched_c = cobj
+                    break
+            if matched_c:
+                break
+
+        if matched_c:
+            svc_status = "running" if matched_c.status == "running" else "stopped"
+            cname_out = matched_c.name
+        elif svc["key"] == "psm-api":
+            svc_status = "running"
+            cname_out = "homelab_psm_api"
+        elif svc["prom_job"] and svc["prom_job"].lower() in prom_jobs_up:
+            svc_status = "running"
+            cname_out = svc["aliases"][0]
+        else:
+            svc_status = "standby"
+            cname_out = svc["aliases"][0]
+
+        if svc_status == "running":
+            running_eco_count += 1
+
+        ecosystem_items.append({
+            "key": svc["key"],
+            "label": svc["label"],
+            "category": svc["category"],
+            "port": svc["port"],
+            "domain": svc["domain"],
+            "container_name": cname_out,
+            "status": svc_status,
+            "prometheus_scraped": bool(svc["prom_job"] and svc["prom_job"].lower() in prom_jobs_up),
+        })
+
+    top_containers = _normalize_container_stats(primary_tele.get("container_stats") or [])
+
+    alert_rules = [
+        {
+            "id": "rule-cpu",
+            "label": f"High CPU Utilization (> {cpu_thresh:.0f}%)",
+            "current_value": f"{avg_cpu:.1f}%",
+            "threshold": cpu_thresh,
+            "status": "firing" if avg_cpu >= cpu_thresh else "ok",
+            "enabled": True,
+        },
+        {
+            "id": "rule-memory",
+            "label": f"High RAM Utilization (> {mem_thresh:.0f}%)",
+            "current_value": f"{avg_mem:.1f}%",
+            "threshold": mem_thresh,
+            "status": "firing" if avg_mem >= mem_thresh else "ok",
+            "enabled": True,
+        },
+        {
+            "id": "rule-disk",
+            "label": f"Root Disk Capacity (> {disk_thresh:.0f}%)",
+            "current_value": f"{avg_disk:.1f}%",
+            "threshold": disk_thresh,
+            "status": "firing" if avg_disk >= disk_thresh else "ok",
+            "enabled": True,
+        },
+        {
+            "id": "rule-heartbeat",
+            "label": f"Agent Heartbeat Watchdog (> {settings.HEARTBEAT_TIMEOUT_SECONDS}s)",
+            "current_value": f"{online_count}/{max(total_servers, 1)} online",
+            "threshold": settings.HEARTBEAT_TIMEOUT_SECONDS,
+            "status": "firing" if offline_count > 0 else "ok",
+            "enabled": bool(notif_cfg.get("notify_server_offline", True)),
+        },
+    ]
 
     return {
+        "primary_server_id": primary_server.id if primary_server else None,
+        "primary_server_name": primary_server.name if primary_server else "Homelab-Primary",
         "servers": {
             "total": total_servers,
             "online": online_count,
@@ -361,21 +637,230 @@ def get_monitoring_overview(
         },
         "resources": {
             "avg_cpu_percent": round(avg_cpu, 1),
+            "cpu_cores": primary_cpu_cores,
+            "load_avg": primary_load_avg,
+            "uptime_seconds": primary_uptime,
             "avg_memory_percent": round(avg_mem, 1),
-            "avg_disk_percent": round(avg_disk, 1),
             "memory_used_bytes": mem_used_total,
+            "memory_available_bytes": mem_avail_total,
             "memory_total_bytes": mem_cap_total,
+            "swap_used_bytes": swap_used_total,
+            "swap_total_bytes": swap_cap_total,
+            "swap_percent": swap_percent,
+            "avg_disk_percent": round(avg_disk, 1),
             "disk_used_bytes": disk_used_total,
             "disk_total_bytes": disk_cap_total,
+            "disk_read_bytes_per_sec": round(disk_read_total, 1),
+            "disk_write_bytes_per_sec": round(disk_write_total, 1),
+            "network_rx_bytes_per_sec": round(net_rx_total, 1),
+            "network_tx_bytes_per_sec": round(net_tx_total, 1),
         },
         "containers": {
             "total": total_containers,
             "running": running_containers,
             "stopped": total_containers - running_containers,
         },
+        "homelab_services": {
+            "total": len(ecosystem_items),
+            "running": running_eco_count,
+            "items": ecosystem_items,
+        },
+        "top_containers": top_containers[:15],
         "prometheus": prom_status,
         "recent_deployments_count": len(recent_deployments),
+        "alert_rules": alert_rules,
+        "notifications_enabled": bool(notif_cfg.get("enabled", False)),
         "alerts": alerts,
+    }
+
+
+def _compute_dir_footprint(dir_path: str, max_entries: int = 1500) -> Dict[str, int]:
+    total_size = 0
+    files_count = 0
+    scanned = 0
+    if not dir_path or not os.path.isdir(dir_path):
+        return {"bytes": 0, "files": 0}
+    try:
+        stack = [dir_path]
+        while stack and scanned < max_entries:
+            curr = stack.pop()
+            try:
+                with os.scandir(curr) as it:
+                    for entry in it:
+                        scanned += 1
+                        if scanned > max_entries:
+                            break
+                        if entry.is_symlink():
+                            continue
+                        if entry.is_file(follow_symlinks=False):
+                            files_count += 1
+                            try:
+                                total_size += entry.stat(follow_symlinks=False).st_size
+                            except OSError:
+                                pass
+                        elif entry.is_dir(follow_symlinks=False) and entry.name not in (".git", "node_modules", "vendor", ".next"):
+                            stack.append(entry.path)
+            except OSError:
+                pass
+    except Exception:
+        pass
+    return {"bytes": total_size, "files": files_count}
+
+
+def _load_custom_s3_buckets() -> List[Dict[str, Any]]:
+    try:
+        if os.path.exists(S3_BUCKETS_REGISTRY_FILE):
+            with open(S3_BUCKETS_REGISTRY_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    return data
+    except Exception:
+        pass
+    return []
+
+
+def _save_custom_s3_buckets(items: List[Dict[str, Any]]) -> None:
+    try:
+        os.makedirs(os.path.dirname(S3_BUCKETS_REGISTRY_FILE), exist_ok=True)
+        with open(S3_BUCKETS_REGISTRY_FILE, "w", encoding="utf-8") as f:
+            json.dump(items, f, indent=2)
+    except Exception:
+        pass
+
+
+def _probe_minio_status(db: Session, force_refresh: bool = False) -> Dict[str, Any]:
+    now_ts = time.time()
+    is_testing = os.getenv("TESTING", "").lower() == "true"
+    if not force_refresh and _MINIO_STATUS_CACHE["data"] and now_ts < _MINIO_STATUS_CACHE["expires_at"]:
+        return _MINIO_STATUS_CACHE["data"]
+
+    default_buckets = [
+        {"name": "images", "access": "public-read", "purpose": "Static assets & image uploads"},
+        {"name": "stock-umkm", "access": "public-read", "purpose": "Laravel / UMKM product catalog media"},
+        {"name": "homelab-storage", "access": "private", "purpose": "Shared Homelab object storage"},
+        {"name": "backups", "access": "private", "purpose": "PSM & Database disaster-recovery archives"},
+    ]
+    bucket_map: Dict[str, Dict[str, Any]] = {b["name"]: dict(b) for b in default_buckets}
+
+    for custom_b in _load_custom_s3_buckets():
+        bname = str(custom_b.get("name") or "").strip().lower()
+        if bname:
+            bucket_map[bname] = {
+                "name": bname,
+                "access": "public-read" if custom_b.get("public_read", True) else "private",
+                "purpose": custom_b.get("purpose", "Custom project S3 bucket"),
+            }
+
+    # Discover project-referenced S3 buckets from EnvironmentVariable keys
+    try:
+        s3_vars = (
+            db.query(EnvironmentVariable)
+            .filter(EnvironmentVariable.key.in_(["AWS_BUCKET", "S3_BUCKET", "S3_BUCKET_NAME", "MINIO_BUCKET"]))
+            .all()
+        )
+        for ev in s3_vars:
+            val = (decrypt_secret(ev.encrypted_value) or "").strip().lower()
+            if val and re.match(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$", val) and val not in bucket_map:
+                bucket_map[val] = {
+                    "name": val,
+                    "access": "public-read",
+                    "purpose": "Connected PSM Project S3 Bucket",
+                }
+    except Exception:
+        pass
+
+    endpoint_env = os.getenv("MINIO_ENDPOINT", "http://minio:9000").strip().rstrip("/")
+    online = False
+    resolved_endpoint = endpoint_env
+
+    if not is_testing:
+        candidates = [endpoint_env, "http://minio:9000", f"http://{settings.SERVER_LAN_IP}:9000", "http://127.0.0.1:9000"]
+        seen_c = set()
+        for cand in candidates:
+            if not cand or cand in seen_c:
+                continue
+            seen_c.add(cand)
+            try:
+                req = urllib.request.Request(
+                    f"{cand}/minio/health/live",
+                    headers={"User-Agent": "PSM-Storage-Monitor/1.0"},
+                )
+                with urllib.request.urlopen(req, timeout=0.8) as res:
+                    if res.status in (200, 204):
+                        online = True
+                        resolved_endpoint = cand
+                        break
+            except Exception:
+                continue
+
+        # Also check if MinIO container is running in inventory DB when internal network differs
+        if not online:
+            minio_c = (
+                db.query(Container)
+                .filter(Container.status == "running")
+                .all()
+            )
+            if any("minio" in c.name.lower() or "silo" in c.name.lower() for c in minio_c):
+                online = True
+
+    result = {
+        "online": online,
+        "endpoint_internal": "http://minio:9000",
+        "resolved_endpoint": resolved_endpoint,
+        "api_port": 9000,
+        "console_port": 9002,
+        "domain_api": "s3.homelab",
+        "domain_console": "minio.homelab",
+        "buckets": list(bucket_map.values()),
+        "buckets_count": len(bucket_map),
+    }
+    _MINIO_STATUS_CACHE["data"] = result
+    _MINIO_STATUS_CACHE["expires_at"] = now_ts + (2.0 if is_testing else 20.0)
+    return result
+
+
+def _resolve_volume_metadata(v_name: str, v_driver: str, running_container_names: List[str]) -> Dict[str, Any]:
+    raw_driver = v_driver or "local"
+    clean_driver = raw_driver
+    attached: List[str] = []
+
+    if "|u:" in raw_driver:
+        clean_driver, enc = raw_driver.split("|u:", 1)
+        attached = [x.strip() for x in enc.split(",") if x.strip()]
+    elif "|used:" in raw_driver:
+        clean_driver, enc = raw_driver.split("|used:", 1)
+        attached = [x.strip() for x in enc.split(",") if x.strip()]
+
+    v_low = v_name.strip().lower()
+    stripped = re.sub(r"^(homelab_|psm_)", "", v_low)
+    role = "Docker Persistent Volume"
+
+    known = HOMELAB_VOLUME_ROLES.get(v_low) or HOMELAB_VOLUME_ROLES.get(stripped)
+    if known:
+        expected_containers, role = known
+        if not attached:
+            for exp in expected_containers:
+                for rc in running_container_names:
+                    if rc == exp or rc.endswith(f"_{exp}") or rc.endswith(f"-{exp}"):
+                        if rc not in attached:
+                            attached.append(rc)
+            # Control plane itself always mounts psm_storage & uses postgres_data in production
+            if stripped == "psm_storage" and not attached and os.path.isdir(settings.STORAGE_BASE_DIR):
+                attached.append("psm-api")
+
+    if not attached and len(stripped) >= 4:
+        for rc in running_container_names:
+            rc_clean = re.sub(r"^(homelab_|psm_)", "", rc)
+            if stripped == rc_clean or stripped.startswith(f"{rc_clean}_") or stripped.endswith(f"_{rc_clean}"):
+                attached.append(rc)
+
+    is_used = len(attached) > 0
+    return {
+        "driver": clean_driver or "local",
+        "attached_containers": attached,
+        "role": role,
+        "in_use": is_used,
+        "status": "in-use" if is_used else "unused",
     }
 
 
@@ -385,7 +870,7 @@ def get_storage_telemetry(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Return comprehensive storage utilization (used vs unused), partitions, volumes, and Disk Read/Write I/O."""
+    """Return comprehensive Homelab storage utilization, disk I/O, accurate Docker volume mounts, PSM footprint & MinIO S3 status."""
     servers = db.query(Server).all()
     target_server = None
     if server_id:
@@ -427,52 +912,74 @@ def get_storage_telemetry(
             }
         ]
 
-    # Docker Volumes (Used vs Unused)
+    # Docker Volumes (Accurate Mount & Homelab Service Matching — no false index-based positives)
     db_volumes = db.query(Volume).filter(Volume.server_id == sid).all() if target_server else []
-    running_containers = db.query(Container).filter(Container.server_id == sid).all() if target_server else []
-    active_container_names = [c.name.lower() for c in running_containers]
+    server_containers = db.query(Container).filter(Container.server_id == sid).all() if target_server else []
+    running_container_names = [
+        c.name.strip().lstrip("/").lower()
+        for c in server_containers
+        if c.status == "running"
+    ]
 
     volumes_list = []
     if db_volumes:
-        for idx, v in enumerate(db_volumes):
-            vname = v.name.lower()
-            is_used = (
-                "psm" in vname
-                or "postgres" in vname
-                or "storage" in vname
-                or any(cname in vname or vname in cname for cname in active_container_names)
-                or idx < len(running_containers)
-            )
+        for v in db_volumes:
+            meta = _resolve_volume_metadata(v.name, v.driver, running_container_names)
             volumes_list.append({
                 "id": v.id,
                 "name": v.name,
-                "driver": v.driver,
+                "driver": meta["driver"],
                 "mountpoint": v.mountpoint,
-                "status": "in-use" if is_used else "unused",
-                "in_use": is_used,
+                "role": meta["role"],
+                "attached_containers": meta["attached_containers"],
+                "status": meta["status"],
+                "in_use": meta["in_use"],
             })
     else:
-        volumes_list = [
-            {
-                "id": "vol-1",
-                "name": "psm-postgres",
-                "driver": "local",
-                "mountpoint": "/var/lib/docker/volumes/psm-postgres/_data",
-                "status": "in-use",
-                "in_use": True,
-            },
-            {
-                "id": "vol-2",
-                "name": "psm-storage",
-                "driver": "local",
-                "mountpoint": "/var/lib/docker/volumes/psm-storage/_data",
-                "status": "in-use",
-                "in_use": True,
-            },
+        default_homelab_vols = [
+            ("vol-pg", "homelab_postgres_data", ["homelab_postgres"], "PostgreSQL 16 Databases (psm, pap_core, eternal_iot)"),
+            ("vol-mysql", "homelab_mysql_data", ["homelab_mysql"], "MySQL 8.4 Databases (fadb, stock_umkm)"),
+            ("vol-redis", "homelab_redis_data", ["homelab_redis"], "Redis 7 AOF Cache & Message Broker"),
+            ("vol-minio", "homelab_minio_data", ["homelab_minio"], "MinIO / Silo S3 Object Storage Buckets"),
+            ("vol-prom", "homelab_prometheus_data", ["homelab_prometheus"], "Prometheus 15-Day Metrics TSDB"),
+            ("vol-graf", "homelab_grafana_data", ["homelab_grafana"], "Grafana Dashboards & Provisioned State"),
+            ("vol-psm", "homelab_psm_storage", ["homelab_psm_api", "homelab_psm_agent"], "PSM Workspaces, Releases, Uploads & Backups"),
         ]
+        for vid, vname, attached_c, vrole in default_homelab_vols:
+            volumes_list.append({
+                "id": vid,
+                "name": vname,
+                "driver": "local",
+                "mountpoint": f"/var/lib/docker/volumes/{vname}/_data",
+                "role": vrole,
+                "attached_containers": attached_c,
+                "status": "in-use",
+                "in_use": True,
+            })
 
     used_volumes_count = sum(1 for v in volumes_list if v["in_use"])
     unused_volumes_count = len(volumes_list) - used_volumes_count
+
+    # PSM Storage Footprint (/opt/psm subdirectories + Docker images count)
+    base_dir = settings.STORAGE_BASE_DIR
+    ws_fp = _compute_dir_footprint(os.path.join(base_dir, "workspaces"))
+    up_fp = _compute_dir_footprint(os.path.join(base_dir, "uploads"))
+    bk_fp = _compute_dir_footprint(os.path.join(base_dir, "backups"))
+    docker_images_count = db.query(DockerImage).filter(DockerImage.server_id == sid).count() if target_server else 0
+
+    psm_footprint = {
+        "base_dir": base_dir,
+        "workspaces_bytes": ws_fp["bytes"],
+        "workspaces_files": ws_fp["files"],
+        "uploads_bytes": up_fp["bytes"],
+        "uploads_files": up_fp["files"],
+        "backups_bytes": bk_fp["bytes"],
+        "backups_files": bk_fp["files"],
+        "total_psm_bytes": ws_fp["bytes"] + up_fp["bytes"] + bk_fp["bytes"],
+        "docker_images_count": docker_images_count,
+    }
+
+    minio_status = _probe_minio_status(db)
 
     return {
         "server_id": sid,
@@ -497,7 +1004,67 @@ def get_storage_telemetry(
             "unused": unused_volumes_count,
             "items": volumes_list,
         },
+        "psm_footprint": psm_footprint,
+        "minio": minio_status,
         "recorded_at": tele.get("recorded_at", datetime.now(timezone.utc).isoformat()),
+    }
+
+
+@router.post("/storage/s3/buckets")
+def create_minio_s3_bucket(
+    payload: S3BucketCreateRequest,
+    current_user: User = Depends(require_role("owner", "admin", "operator")),
+    db: Session = Depends(get_db),
+):
+    """Create and register an S3 bucket in Homelab MinIO / Silo Object Storage."""
+    bucket = (payload.bucket_name or "").strip().lower()
+    if not re.match(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$", bucket) or ".." in bucket:
+        raise HTTPException(
+            status_code=400,
+            detail="Nama bucket S3 harus 3-63 karakter (huruf kecil, angka, titik, atau tanda hubung).",
+        )
+
+    provisioned_live = False
+    is_testing = os.getenv("TESTING", "").lower() == "true"
+    root_user = os.getenv("MINIO_ROOT_USER", "admin")
+    root_pass = os.getenv("MINIO_ROOT_PASSWORD", "admin12345")
+
+    if not is_testing:
+        for cname in ("homelab_minio", "minio"):
+            try:
+                anon_cmd = f" && mc anonymous set download local/{bucket}" if payload.public_read else ""
+                cmd = [
+                    "docker", "exec", cname, "sh", "-c",
+                    f"mc alias set local http://127.0.0.1:9000 {root_user} {root_pass} >/dev/null 2>&1 "
+                    f"&& mc mb --ignore-existing local/{bucket} >/dev/null 2>&1{anon_cmd}"
+                ]
+                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+                if proc.returncode == 0:
+                    provisioned_live = True
+                    break
+            except Exception:
+                continue
+
+    existing = _load_custom_s3_buckets()
+    existing = [b for b in existing if str(b.get("name") or "").lower() != bucket]
+    existing.append({
+        "name": bucket,
+        "public_read": payload.public_read,
+        "purpose": "Custom Homelab Project Bucket",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    _save_custom_s3_buckets(existing)
+    minio_status = _probe_minio_status(db, force_refresh=True)
+
+    return {
+        "status": "created",
+        "bucket_name": bucket,
+        "public_read": payload.public_read,
+        "provisioned_on_minio": provisioned_live,
+        "s3_endpoint_internal": "http://minio:9000",
+        "public_url_lan": f"http://{settings.SERVER_LAN_IP}:9000/{bucket}",
+        "public_url_domain": f"http://s3.homelab/{bucket}",
+        "minio": minio_status,
     }
 
 

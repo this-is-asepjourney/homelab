@@ -14,7 +14,7 @@ from app.core.config import get_settings
 from app.core.exceptions import AuthenticationError
 
 try:
-    from pwdlib import PasswordHash
+    from pwdlib import PasswordHash  # type: ignore[missing-import]
 
     _pwd_hasher = PasswordHash.recommended()
 except Exception:  # pragma: no cover - fallback when pwdlib[argon2] is not installed locally

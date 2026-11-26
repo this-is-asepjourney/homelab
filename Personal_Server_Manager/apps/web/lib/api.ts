@@ -630,6 +630,17 @@ export const api = {
     return res.ok ? res.json() : null;
   },
 
+  async createS3Bucket(bucketName: string, publicRead = true) {
+    const res = await fetchWithAuth('/api/v1/monitoring/storage/s3/buckets', {
+      method: 'POST',
+      body: JSON.stringify({ bucket_name: bucketName, public_read: publicRead }),
+    });
+    if (!res.ok) {
+      throw new Error(await extractApiErrorMessage(res, 'Gagal membuat bucket S3'));
+    }
+    return res.json();
+  },
+
   async getNetworkTelemetry(serverId?: string) {
     const qs = serverId ? `?server_id=${serverId}` : '';
     const res = await fetchWithAuth(`/api/v1/monitoring/network${qs}`);
@@ -651,12 +662,20 @@ export const api = {
     return res.ok ? res.json() : [];
   },
 
-  async createBackup(data: { name: string; backup_type: string; target_id?: string }) {
+  async createBackup(data: {
+    name: string;
+    backup_type: string;
+    target_id?: string;
+    database_name?: string;
+    sync_to_s3?: boolean;
+  }) {
     const res = await fetchWithAuth('/api/v1/backups', {
       method: 'POST',
       body: JSON.stringify(data),
     });
-    if (!res.ok) throw new Error('Failed to create backup');
+    if (!res.ok) {
+      throw new Error(await extractApiErrorMessage(res, 'Failed to create backup'));
+    }
     return res.json();
   },
 

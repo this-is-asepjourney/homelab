@@ -167,10 +167,29 @@ class DockerManager:
         if self._sdk:
             try:
                 raw_vols = (self._sdk.api.volumes() or {}).get("Volumes") or []
+                # Map volume -> list of container names currently mounting it
+                mounted_by: Dict[str, List[str]] = {}
+                try:
+                    for c_item in self._sdk.api.containers(all=True) or []:
+                        names = c_item.get("Names") or []
+                        cname = names[0].lstrip("/") if names else (c_item.get("Id") or "")[:12]
+                        for m in c_item.get("Mounts") or []:
+                            vname = m.get("Name")
+                            if m.get("Type") == "volume" and vname:
+                                bucket = mounted_by.setdefault(vname, [])
+                                if cname and cname not in bucket:
+                                    bucket.append(cname)
+                except Exception:
+                    pass
+
                 return [
                     {
                         "name": v.get("Name", ""),
-                        "driver": v.get("Driver", "local"),
+                        "driver": (
+                            f"{v.get('Driver', 'local')}|u:{','.join(mounted_by.get(v.get('Name', ''), []))}"[:48].rstrip(",")
+                            if mounted_by.get(v.get("Name", ""))
+                            else v.get("Driver", "local")
+                        ),
                         "mountpoint": v.get("Mountpoint", f"/var/lib/docker/volumes/{v.get('Name', '')}/_data"),
                     }
                     for v in raw_vols

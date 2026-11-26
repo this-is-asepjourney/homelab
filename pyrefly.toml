@@ -1,0 +1,25 @@
+search-path = [
+  "Personal_Server_Manager",
+  "Personal_Api_Platform",
+]
+
+project-excludes = [
+  "**/node_modules",
+  "**/.next",
+  "**/__pycache__",
+  "**/.pytest_cache",
+  "storage",
+]
+
+python-interpreter-path = "C:/Users/PKIG/miniconda3/python.exe"
+
+# Keep `missing-import` & `unknown-name` active while silencing SQLAlchemy 1.x `Column`/`relationship` false positives
+[errors]
+bad-assignment = false
+bad-argument-type = false
+bad-return = false
+unsupported-operation = false
+no-matching-overload = false
+missing-attribute = false
+not-iterable = false
+invalid-inheritance = false

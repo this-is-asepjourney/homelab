@@ -140,6 +140,9 @@ class MetricsReportRequest(BaseModel):
     memory_usage: float
     memory_used_bytes: int = 0
     memory_total_bytes: int = 0
+    memory_available_bytes: int = 0
+    swap_used_bytes: int = 0
+    swap_total_bytes: int = 0
     disk_usage: float
     disk_used_bytes: int = 0
     disk_free_bytes: int = 0
@@ -371,8 +374,10 @@ class JobLogBatchRequest(BaseModel):
 # --- Backup Schemas ---
 class BackupCreate(BaseModel):
     name: str
-    backup_type: str = "database"  # database, project, volume
+    backup_type: str = "database"  # database, postgres_sql, mysql_sql, project_workspace
     target_id: Optional[str] = None
+    database_name: Optional[str] = None
+    sync_to_s3: bool = True
 
 class BackupResponse(BaseModel):
     id: str
@@ -381,6 +386,7 @@ class BackupResponse(BaseModel):
     target_id: Optional[str] = None
     size_bytes: int
     status: str
+    metadata_json: Optional[Dict[str, Any]] = None
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)

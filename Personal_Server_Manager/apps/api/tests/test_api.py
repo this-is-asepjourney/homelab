@@ -848,3 +848,146 @@ def test_project_maintenance_mode_and_preview(client):
     disable_data = disable_res.json()
     assert disable_data["maintenance_mode"] is False
     assert disable_data["project"]["status"] == "active"
+
+
+def test_homelab_monitoring_storage_s3_and_backups_suite(client):
+    token = get_auth_token(client)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # 1. Create isolated server + sync inventory with mounted & unmounted volumes
+    srv_res = client.post(
+        "/api/v1/servers",
+        json={"name": "Homelab-Storage-Node", "hostname": "192.168.25.105"},
+        headers=headers,
+    )
+    assert srv_res.status_code == 200
+    sid = srv_res.json()["server_id"]
+    atoken = srv_res.json()["agent_token"]
+
+    client.post(
+        "/api/v1/agents/register",
+        json={"server_id": sid, "agent_token": atoken, "agent_version": "0.2.0"},
+    )
+    client.post(
+        "/api/v1/agents/metrics",
+        json={
+            "server_id": sid,
+            "cpu_usage": 22.5,
+            "cpu_cores": 4,
+            "load_avg": [0.45, 0.38, 0.31],
+            "memory_usage": 61.2,
+            "memory_used_bytes": 2576980377,
+            "memory_available_bytes": 1610612736,
+            "memory_total_bytes": 4294967296,
+            "swap_used_bytes": 536870912,
+            "swap_total_bytes": 2147483648,
+            "disk_usage": 48.0,
+            "disk_used_bytes": 51539607552,
+            "disk_total_bytes": 107374182400,
+            "container_stats": [
+                {
+                    "id": "c1",
+                    "name": "homelab_postgres",
+                    "cpu_percent": "4.25%",
+                    "mem_usage": "96MiB / 384MiB",
+                    "mem_percent": "25.0%",
+                    "net_io": "12MB / 8MB",
+                    "block_io": "40MB / 15MB",
+                }
+            ],
+        },
+    )
+    inv_res = client.post(
+        "/api/v1/agents/inventory",
+        json={
+            "server_id": sid,
+            "containers": [
+                {
+                    "docker_id": "pg111",
+                    "name": "homelab_postgres",
+                    "image": "postgres:16-alpine",
+                    "status": "running",
+                    "ports": ["5432:5432"],
+                },
+                {
+                    "docker_id": "mn222",
+                    "name": "homelab_minio",
+                    "image": "pgsty/silo:latest",
+                    "status": "running",
+                    "ports": ["9000:9000", "9002:9001"],
+                },
+            ],
+            "images": [
+                {"id": "img1", "repository": "postgres", "tag": "16-alpine", "size": "240 MB", "created": "Today"}
+            ],
+            "volumes": [
+                {
+                    "name": "homelab_postgres_data",
+                    "driver": "local|u:homelab_postgres",
+                    "mountpoint": "/var/lib/docker/volumes/homelab_postgres_data/_data",
+                },
+                {
+                    "name": "dangling_orphan_vol",
+                    "driver": "local",
+                    "mountpoint": "/var/lib/docker/volumes/dangling_orphan_vol/_data",
+                },
+            ],
+            "networks": [{"name": "homelab_net", "driver": "bridge", "scope": "local"}],
+        },
+        headers={"x-agent-token": atoken, "x-server-id": sid},
+    )
+    assert inv_res.status_code == 200
+
+    # 2. Verify Monitoring Overview includes Homelab ecosystem matrix, Swap, and alert_rules
+    ov_res = client.get("/api/v1/monitoring/overview", headers=headers)
+    assert ov_res.status_code == 200
+    ov = ov_res.json()
+    assert "homelab_services" in ov
+    assert ov["homelab_services"]["total"] == 18
+    assert "swap_percent" in ov["resources"]
+    assert "alert_rules" in ov
+    assert len(ov["alert_rules"]) == 4
+
+    # 3. Verify Storage Telemetry accurately distinguishes mounted vs unmounted volumes + PSM footprint + MinIO
+    st_res = client.get(f"/api/v1/monitoring/storage?server_id={sid}", headers=headers)
+    assert st_res.status_code == 200
+    st = st_res.json()
+    vol_map = {v["name"]: v for v in st["volumes"]["items"]}
+    assert vol_map["homelab_postgres_data"]["in_use"] is True
+    assert "homelab_postgres" in vol_map["homelab_postgres_data"]["attached_containers"]
+    assert vol_map["dangling_orphan_vol"]["in_use"] is False
+    assert st["volumes"]["in_use"] == 1
+    assert st["volumes"]["unused"] == 1
+    assert "psm_footprint" in st
+    assert st["psm_footprint"]["docker_images_count"] == 1
+    assert "minio" in st
+    assert any(b["name"] == "backups" for b in st["minio"]["buckets"])
+
+    # 4. Create custom S3 bucket via API
+    bkt_res = client.post(
+        "/api/v1/monitoring/storage/s3/buckets",
+        json={"bucket_name": "archflow-assets", "public_read": True},
+        headers=headers,
+    )
+    assert bkt_res.status_code == 200
+    assert bkt_res.json()["bucket_name"] == "archflow-assets"
+    assert any(b["name"] == "archflow-assets" for b in bkt_res.json()["minio"]["buckets"])
+
+    # 5. Create PostgreSQL SQL dump, Workspace ZIP, and Control Plane JSON + verify restore
+    pg_bk = client.post(
+        "/api/v1/backups",
+        json={"name": "pg-psm-dump", "backup_type": "postgres_sql", "database_name": "psm", "sync_to_s3": False},
+        headers=headers,
+    )
+    assert pg_bk.status_code == 200
+    assert pg_bk.json()["metadata_json"]["format"] == "sql"
+    assert pg_bk.json()["metadata_json"]["database_name"] == "psm"
+
+    ws_bk = client.post(
+        "/api/v1/backups",
+        json={"name": "workspaces-archive", "backup_type": "project_workspace", "sync_to_s3": False},
+        headers=headers,
+    )
+    assert ws_bk.status_code == 200
+    assert ws_bk.json()["metadata_json"]["format"] == "zip"
+

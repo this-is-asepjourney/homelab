@@ -446,7 +446,7 @@ class BackupService:
                 config_results = cls._collect_configs(cfg_dir)
 
             # 3. Create Manifest
-            manifest_data = {
+            manifest_data: dict[str, Any] = {
                 "backup_id": backup_id,
                 "version": "2.0",
                 "created_at": now.isoformat(),
