@@ -1,11 +1,12 @@
 import json
 import os
+import re
 import socket
 import time
 import urllib.request
 import urllib.error
 from datetime import datetime, timezone, timedelta
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
@@ -19,10 +20,12 @@ from apps.api.app.models.entities import (
     DockerNetwork,
     ServerMetric,
     Deployment,
+    Project,
     User,
 )
 from apps.api.app.api.v1.servers import compute_server_status
-from apps.api.app.api.v1.agents import LATEST_TELEMETRY
+from apps.api.app.api.v1.agents import LATEST_TELEMETRY, NET_HISTORY_BUFFER
+from apps.api.app.services.pap_client import extract_host_port, resolve_effective_domain
 
 router = APIRouter(prefix="/monitoring", tags=["Monitoring Center"])
 
@@ -498,13 +501,116 @@ def get_storage_telemetry(
     }
 
 
+_SIZE_UNITS = {
+    "B": 1,
+    "KB": 1000,
+    "KIB": 1024,
+    "MB": 1000**2,
+    "MIB": 1024**2,
+    "GB": 1000**3,
+    "GIB": 1024**3,
+    "TB": 1000**4,
+    "TIB": 1024**4,
+}
+
+
+def _parse_docker_net_io_pair(net_io_str: str) -> Tuple[int, int]:
+    """Parse Docker stats NetIO string (e.g. '14.2MB / 8.5kB') into (rx_bytes, tx_bytes)."""
+    if not net_io_str or "/" not in net_io_str:
+        return 0, 0
+
+    def _one(part: str) -> int:
+        m = re.match(r"^\s*([0-9]+(?:\.[0-9]+)?)\s*([a-zA-Z]+)\s*$", part.strip())
+        if not m:
+            return 0
+        val = float(m.group(1))
+        unit = m.group(2).upper()
+        return int(val * _SIZE_UNITS.get(unit, 1))
+
+    left, right = net_io_str.split("/", 1)
+    return _one(left), _one(right)
+
+
+def _build_ingress_and_container_flows(
+    db: Session,
+    server_id: str,
+    tele: Dict[str, Any],
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Build per-container network traffic ranking and active `.homelab` Nginx ingress route map."""
+    db_containers = db.query(Container).filter(Container.server_id == server_id).all()
+    cont_by_name = {c.name.lower(): c for c in db_containers}
+
+    container_network: List[Dict[str, Any]] = []
+    for st in tele.get("container_stats") or []:
+        cname = (st.get("name") or "").strip()
+        if not cname:
+            continue
+        rx_b, tx_b = _parse_docker_net_io_pair(st.get("net_io", ""))
+        c_rec = cont_by_name.get(cname.lower())
+        ports = c_rec.ports if (c_rec and c_rec.ports) else []
+        container_network.append({
+            "name": cname,
+            "status": c_rec.status if c_rec else "running",
+            "image": c_rec.image if c_rec else "",
+            "net_io": st.get("net_io", "0B / 0B"),
+            "rx_bytes": rx_b,
+            "tx_bytes": tx_b,
+            "total_bytes": rx_b + tx_b,
+            "cpu_percent": float(st.get("cpu_percent") or 0.0),
+            "mem_usage": st.get("mem_usage", "0B / 0B"),
+            "ports": ports,
+        })
+    container_network.sort(key=lambda x: x["total_bytes"], reverse=True)
+
+    # Core Homelab Ingress Routes + Deployed Project Routes
+    core_routes: List[Dict[str, Any]] = [
+        {"domain": "psm.homelab", "target": "psm-web:3005", "host_port": 3005, "kind": "core", "service": "PSM Console UI"},
+        {"domain": "psm-api.homelab", "target": "psm-api:8000", "host_port": 8001, "kind": "core", "service": "PSM Control Plane API"},
+        {"domain": "api.homelab", "target": "pap-api:8000", "host_port": 8000, "kind": "core", "service": "PAP Core Gateway"},
+        {"domain": "grafana.homelab", "target": "grafana:3000", "host_port": 3000, "kind": "core", "service": "Grafana Dashboard"},
+        {"domain": "prometheus.homelab", "target": "prometheus:9090", "host_port": 9090, "kind": "core", "service": "Prometheus TSDB"},
+        {"domain": "kuma.homelab", "target": "uptime-kuma:3001", "host_port": 3001, "kind": "core", "service": "Uptime Kuma"},
+        {"domain": "nextcloud.homelab", "target": "nextcloud:80", "host_port": 8080, "kind": "core", "service": "Nextcloud Drive"},
+        {"domain": "minio.homelab", "target": "minio:9001", "host_port": 9002, "kind": "core", "service": "MinIO S3 Console"},
+        {"domain": "s3.homelab", "target": "minio:9000", "host_port": 9000, "kind": "core", "service": "MinIO S3 API"},
+    ]
+
+    ingress_routes: List[Dict[str, Any]] = []
+    for r in core_routes:
+        svc_slug = r["target"].split(":")[0].lower()
+        c_rec = cont_by_name.get(svc_slug)
+        ingress_routes.append({
+            **r,
+            "status": c_rec.status if c_rec else "active",
+            "maintenance_mode": False,
+        })
+
+    projects = db.query(Project).filter(Project.server_id == server_id).all()
+    for p in projects:
+        eff_domain = resolve_effective_domain(p.domain, p.name)
+        hp = extract_host_port(p.port_mappings)
+        is_maint = bool(getattr(p, "maintenance_mode", False) or p.status == "maintenance")
+        ingress_routes.append({
+            "domain": eff_domain,
+            "target": f"host.docker.internal:{hp}",
+            "host_port": hp,
+            "kind": "project",
+            "service": p.name,
+            "framework": p.framework,
+            "status": "maintenance" if is_maint else p.status,
+            "maintenance_mode": is_maint,
+        })
+
+    return container_network, ingress_routes
+
+
 @router.get("/network")
 def get_network_telemetry(
     server_id: Optional[str] = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Return real-time server network bandwidth, interfaces, listening ports, connections, and Docker networks."""
+    """Return real-time server network bandwidth, active flows, interfaces, ports, container I/O, and ingress routes."""
     servers = db.query(Server).all()
     target_server = None
     if server_id:
@@ -515,33 +621,37 @@ def get_network_telemetry(
     sid = target_server.id if target_server else "homelab-primary"
     tele = _get_live_or_cached_telemetry(sid)
 
-    latest_metric = (
-        db.query(ServerMetric)
-        .filter(ServerMetric.server_id == sid)
-        .order_by(ServerMetric.recorded_at.desc())
-        .first()
-    )
+    rx_rate = tele.get("network_rx") if "network_rx" in tele else tele.get("network_rx_bytes_per_sec")
+    tx_rate = tele.get("network_tx") if "network_tx" in tele else tele.get("network_tx_bytes_per_sec")
 
-    rx_rate = tele.get("network_rx") if "network_rx" in tele else tele.get("network_rx_bytes_per_sec", latest_metric.network_rx if latest_metric else 0.0)
-    tx_rate = tele.get("network_tx") if "network_tx" in tele else tele.get("network_tx_bytes_per_sec", latest_metric.network_tx if latest_metric else 0.0)
-
-    # Recent network history (last 30 samples)
-    recent_metrics = (
-        db.query(ServerMetric)
-        .filter(ServerMetric.server_id == sid)
-        .order_by(ServerMetric.recorded_at.desc())
-        .limit(30)
-        .all()
-    )
-    recent_metrics.reverse()
-    bandwidth_history = [
-        {
-            "time": m.recorded_at.strftime("%H:%M:%S"),
-            "rx_bytes_per_sec": round(m.network_rx or 0.0, 1),
-            "tx_bytes_per_sec": round(m.network_tx or 0.0, 1),
-        }
-        for m in recent_metrics
-    ]
+    # Prefer zero-DB in-memory 5s ring buffer; fall back to PostgreSQL only on cold start
+    mem_hist = list(NET_HISTORY_BUFFER.get(sid) or [])
+    if mem_hist:
+        bandwidth_history = mem_hist[-36:]
+        if rx_rate is None:
+            rx_rate = bandwidth_history[-1]["rx_bytes_per_sec"]
+        if tx_rate is None:
+            tx_rate = bandwidth_history[-1]["tx_bytes_per_sec"]
+    else:
+        recent_metrics = (
+            db.query(ServerMetric)
+            .filter(ServerMetric.server_id == sid)
+            .order_by(ServerMetric.recorded_at.desc())
+            .limit(30)
+            .all()
+        )
+        if recent_metrics and rx_rate is None:
+            rx_rate = recent_metrics[0].network_rx
+            tx_rate = recent_metrics[0].network_tx
+        recent_metrics.reverse()
+        bandwidth_history = [
+            {
+                "time": m.recorded_at.strftime("%H:%M:%S"),
+                "rx_bytes_per_sec": round(m.network_rx or 0.0, 1),
+                "tx_bytes_per_sec": round(m.network_tx or 0.0, 1),
+            }
+            for m in recent_metrics
+        ]
 
     docker_nets = db.query(DockerNetwork).filter(DockerNetwork.server_id == sid).all() if target_server else []
     docker_networks_list = (
@@ -553,14 +663,17 @@ def get_network_telemetry(
         else [
             {"id": "net-1", "name": "bridge", "driver": "bridge", "scope": "local"},
             {"id": "net-2", "name": "host", "driver": "host", "scope": "local"},
-            {"id": "net-3", "name": "psm-network", "driver": "bridge", "scope": "local"},
+            {"id": "net-3", "name": "homelab", "driver": "bridge", "scope": "local"},
         ]
     )
+
+    container_network, ingress_routes = _build_ingress_and_container_flows(db, sid, tele)
 
     return {
         "server_id": sid,
         "server_name": target_server.name if target_server else "Homelab-Primary",
-        "hostname": target_server.hostname if target_server else "192.168.25.101",
+        "hostname": target_server.hostname if target_server else settings.SERVER_LAN_IP,
+        "tailscale_ip": settings.SERVER_TS_IP,
         "bandwidth": {
             "rx_bytes_per_sec": round(rx_rate or 0.0, 1),
             "tx_bytes_per_sec": round(tx_rate or 0.0, 1),
@@ -577,8 +690,19 @@ def get_network_telemetry(
         "listening_ports": tele.get("listening_ports", []),
         "connection_stats": tele.get(
             "connection_stats",
-            {"established": 0, "listen": 0, "time_wait": 0, "close_wait": 0, "total": 0},
+            {"established": 0, "listen": 0, "time_wait": 0, "close_wait": 0, "syn_active": 0, "total": 0},
         ),
+        "active_flows": tele.get("active_flows", []),
+        "flow_summary": tele.get(
+            "flow_summary",
+            {
+                "by_direction": {"inbound": 0, "internal": 0, "outbound": 0},
+                "by_zone": {"lan": 0, "tailscale": 0, "docker": 0, "internet": 0, "loopback": 0},
+                "active_flows_count": 0,
+            },
+        ),
+        "container_network": container_network,
+        "ingress_routes": ingress_routes,
         "docker_networks": docker_networks_list,
         "history": bandwidth_history,
         "recorded_at": tele.get("recorded_at", datetime.now(timezone.utc).isoformat()),

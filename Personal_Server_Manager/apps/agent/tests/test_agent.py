@@ -587,6 +587,56 @@ def test_resolve_app_resource_limits(monkeypatch):
     assert DeploymentEngine._resolve_app_resource_limits() == ("768m", None, None)
 
 
+def test_proc_net_parser_and_flow_classification():
+    from apps.agent.app.collectors.metrics import (
+        classify_ip_zone,
+        parse_proc_net_dev,
+        parse_proc_net_sockets,
+    )
+
+    assert classify_ip_zone("192.168.25.105") == "lan"
+    assert classify_ip_zone("100.78.113.53") == "tailscale"
+    assert classify_ip_zone("172.18.0.5") == "docker"
+    assert classify_ip_zone("127.0.0.1") == "loopback"
+    assert classify_ip_zone("1.1.1.1") == "internet"
+
+    sample_dev = (
+        "Inter-|   Receive                                                |  Transmit\n"
+        " face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed\n"
+        "    lo:   10000     100    0    0    0     0          0         0    10000     100    0    0    0     0       0          0\n"
+        "  eth0: 5242880    4200    0    1    0     0          0         0  2097152    3100    0    0    0     0       0          0\n"
+        "tailscale0: 1048576 900    0    0    0     0          0         0   524288     750    0    0    0     0       0          0\n"
+    )
+    dev_parsed = parse_proc_net_dev(sample_dev)
+    assert dev_parsed["eth0"]["rx_bytes"] == 5242880
+    assert dev_parsed["eth0"]["drop_in"] == 1
+    assert dev_parsed["tailscale0"]["tx_bytes"] == 524288
+
+    # Hex little-endian IPv4:
+    # 0.0.0.0:80 -> 00000000:0050 (state 0A = LISTEN)
+    # 192.168.25.105:80 (6919A8C0:0050) <- 100.78.113.53:52100 (35714E64:CB84), state 01 = ESTABLISHED
+    # 172.18.0.7:44210 (070012AC:ACB2) -> 172.18.0.3:5432 (030012AC:1538), state 01 = ESTABLISHED
+    # 192.168.25.105:49000 (6919A8C0:BF68) -> 1.1.1.1:443 (01010101:01BB), state 01 = ESTABLISHED
+    sample_tcp = (
+        "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
+        "   0: 00000000:0050 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 1001\n"
+        "   1: 6919A8C0:0050 35714E64:CB84 01 00000100:00000000 00:00000000 00000000     0        0 1002\n"
+        "   2: 070012AC:ACB2 030012AC:1538 01 00000000:00000000 00:00000000 00000000     0        0 1003\n"
+        "   3: 6919A8C0:BF68 01010101:01BB 01 00000000:00000000 00:00000000 00000000     0        0 1004\n"
+    )
+    parsed_sock = parse_proc_net_sockets([("TCP", False, sample_tcp)])
+    assert parsed_sock["connection_stats"]["listen"] == 1
+    assert parsed_sock["connection_stats"]["established"] == 3
+    assert any(p["port"] == 80 and "Nginx" in p["service"] for p in parsed_sock["listening_ports"])
+
+    summary = parsed_sock["flow_summary"]
+    assert summary["by_direction"] == {"inbound": 1, "internal": 1, "outbound": 1}
+    assert summary["by_zone"]["tailscale"] == 1
+    assert summary["by_zone"]["docker"] == 1
+    assert summary["by_zone"]["internet"] == 1
+
+
+
 
 
 

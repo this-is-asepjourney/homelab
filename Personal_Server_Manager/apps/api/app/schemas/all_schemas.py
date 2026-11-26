@@ -163,6 +163,8 @@ class MetricsReportRequest(BaseModel):
     network_interfaces: Optional[List[Dict[str, Any]]] = None
     listening_ports: Optional[List[Dict[str, Any]]] = None
     connection_stats: Optional[Dict[str, Any]] = None
+    active_flows: Optional[List[Dict[str, Any]]] = None
+    flow_summary: Optional[Dict[str, Any]] = None
     uptime_seconds: int = 0
     load_avg: Optional[List[float]] = None
     cpu_cores: Optional[int] = None

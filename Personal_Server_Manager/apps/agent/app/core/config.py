@@ -10,9 +10,10 @@ class AgentSettings(BaseSettings):
     CONTROL_PLANE_URL: str = os.getenv("CONTROL_PLANE_URL", "http://localhost:8000")
     AGENT_VERSION: str = "0.1.0"
 
-    # Optimized background loop intervals (seconds) to avoid Docker daemon & DB context-switch storms
+    # Optimized background loop intervals (seconds)
+    # METRICS_INTERVAL=5s streams lightweight /proc CPU/RAM/Network in real-time while heavy Docker stats stay cached (30s)
     HEARTBEAT_INTERVAL: int = int(os.getenv("HEARTBEAT_INTERVAL", "15"))
-    METRICS_INTERVAL: int = int(os.getenv("METRICS_INTERVAL", "15"))
+    METRICS_INTERVAL: int = int(os.getenv("METRICS_INTERVAL", "5"))
     CONTAINER_STATS_TTL: int = int(os.getenv("CONTAINER_STATS_TTL", "30"))
     INVENTORY_INTERVAL: int = int(os.getenv("INVENTORY_INTERVAL", "60"))
     POLL_IDLE_INTERVAL: float = float(os.getenv("POLL_IDLE_INTERVAL", "30.0"))

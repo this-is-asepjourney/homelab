@@ -1,8 +1,9 @@
+from collections import deque
 import json
 import os
 import time
 from datetime import datetime, timezone, timedelta
-from typing import List, Optional, Dict, Any, Tuple
+from typing import Deque, List, Optional, Dict, Any, Tuple
 from fastapi import APIRouter, Depends, HTTPException, status, WebSocket, WebSocketDisconnect, Header
 from fastapi.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session
@@ -16,6 +17,7 @@ from apps.api.app.models.entities import (
     AgentToken,
     ServerMetric,
     Job,
+    Deployment,
     DeploymentLog,
     Container,
     Volume,
@@ -38,20 +40,40 @@ router = APIRouter(prefix="/agents", tags=["Agent"])
 
 # In-memory cache of the most recent extended telemetry report per server
 LATEST_TELEMETRY: dict[str, dict] = {}
+# High-resolution 5-second rolling network throughput history in RAM (60 samples = 5 minutes, zero DB queries)
+NET_HISTORY_BUFFER: Dict[str, Deque[Dict[str, Any]]] = {}
+_KNOWN_SERVER_CACHE: Dict[str, Tuple[str, str]] = {}
+_LAST_DB_METRIC_WRITE_MONO: Dict[str, float] = {}
+_DB_METRIC_WRITE_INTERVAL_SEC: float = float(os.getenv("DB_METRIC_WRITE_INTERVAL_SEC", "30"))
 _LAST_METRICS_PRUNE_MONO: float = 0.0
 _METRICS_PRUNE_INTERVAL_SEC: float = 3600.0
 
 
-def _persist_metric_and_prune_sync(payload: MetricsReportRequest) -> Optional[Tuple[str, str, datetime]]:
-    """Persist server metric off the event loop and periodically prune expired rows."""
+def _persist_metric_and_prune_sync(payload: MetricsReportRequest, force_db_write: bool = True) -> Optional[Tuple[str, str, datetime]]:
+    """
+    Resolve server and persist `ServerMetric` at a throttled DB cadence (default every 30s)
+    while allowing 5s real-time RAM + WebSocket updates without disk churn.
+    """
     global _LAST_METRICS_PRUNE_MONO
+    now = datetime.now(timezone.utc)
+    mono_now = time.monotonic()
+
+    # Fast-path in RAM between DB persistence intervals
+    if not force_db_write and payload.server_id in _KNOWN_SERVER_CACHE:
+        cached_id, cached_name = _KNOWN_SERVER_CACHE[payload.server_id]
+        last_w = _LAST_DB_METRIC_WRITE_MONO.get(cached_id, 0.0)
+        if (mono_now - last_w) < _DB_METRIC_WRITE_INTERVAL_SEC:
+            return cached_id, cached_name, now
+
     db = db_session.SessionLocal()
     try:
         server = resolve_server(db, payload.server_id)
         if not server:
             return None
 
-        now = datetime.now(timezone.utc)
+        _KNOWN_SERVER_CACHE[payload.server_id] = (server.id, server.name)
+        _KNOWN_SERVER_CACHE[server.id] = (server.id, server.name)
+
         server.last_seen = now
         server.status = "online"
 
@@ -70,9 +92,9 @@ def _persist_metric_and_prune_sync(payload: MetricsReportRequest) -> Optional[Tu
             recorded_at=now,
         )
         db.add(metric)
+        _LAST_DB_METRIC_WRITE_MONO[server.id] = mono_now
 
         # Hourly retention cleanup so `server_metrics` never bloats PostgreSQL/disk
-        mono_now = time.monotonic()
         if (mono_now - _LAST_METRICS_PRUNE_MONO) >= _METRICS_PRUNE_INTERVAL_SEC:
             retention_hours = max(6, int(os.getenv("METRICS_RETENTION_HOURS", "48")))
             cutoff = now - timedelta(hours=retention_hours)
@@ -212,10 +234,18 @@ def agent_heartbeat(payload: HeartbeatRequest, db: Session = Depends(get_db)):
 
 @router.post("/metrics")
 async def report_metrics(payload: MetricsReportRequest):
-    persisted = await run_in_threadpool(_persist_metric_and_prune_sync, payload)
+    persisted = await run_in_threadpool(_persist_metric_and_prune_sync, payload, False)
     if not persisted:
         raise HTTPException(status_code=404, detail="Server not found")
     resolved_server_id, resolved_server_name, now = persisted
+
+    hist_buf = NET_HISTORY_BUFFER.setdefault(resolved_server_id, deque(maxlen=60))
+    hist_point = {
+        "time": now.strftime("%H:%M:%S"),
+        "rx_bytes_per_sec": round(payload.network_rx_bytes_per_sec or 0.0, 1),
+        "tx_bytes_per_sec": round(payload.network_tx_bytes_per_sec or 0.0, 1),
+    }
+    hist_buf.append(hist_point)
 
     telemetry_snapshot = {
         "cpu_usage": payload.cpu_usage,
@@ -248,6 +278,9 @@ async def report_metrics(payload: MetricsReportRequest):
         "network_interfaces": payload.network_interfaces or [],
         "listening_ports": payload.listening_ports or [],
         "connection_stats": payload.connection_stats or {},
+        "active_flows": payload.active_flows or [],
+        "flow_summary": payload.flow_summary or {},
+        "network_history_point": hist_point,
         "uptime": payload.uptime_seconds,
         "container_stats": payload.container_stats or [],
         "recorded_at": now.isoformat()

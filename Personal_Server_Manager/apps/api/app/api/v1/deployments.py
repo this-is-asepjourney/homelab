@@ -283,7 +283,7 @@ async def finalize_zip_upload(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    if not file.filename.endswith(".zip"):
+    if not (file.filename or "").endswith(".zip"):
         raise HTTPException(status_code=400, detail="Only .zip files are supported")
 
     # Update port mappings and db_type if provided with upload

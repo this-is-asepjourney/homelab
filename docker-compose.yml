@@ -420,6 +420,7 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - /sys/class/net:/host/sys/class/net:ro
       - psm_storage:/opt/psm
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
@@ -440,13 +441,16 @@ services:
     container_name: psm-agent
     restart: unless-stopped
     logging: *default-logging
+    pid: host
     environment:
       SERVER_ID: homelab-primary
       AGENT_TOKEN: ${HOMELAB_AGENT_TOKEN:-psm_agent_homelab_default_token}
       CONTROL_PLANE_URL: http://psm-api:8000
       PSM_BASE_DIR: /opt/psm
+      HOST_PROC_NET_DIR: /proc/1/net
+      HOST_SYS_NET_DIR: /host/sys/class/net
       HEARTBEAT_INTERVAL: "15"
-      METRICS_INTERVAL: "15"
+      METRICS_INTERVAL: "5"
       CONTAINER_STATS_TTL: "30"
       INVENTORY_INTERVAL: "60"
       PSM_BUILD_NICE: "15"
@@ -476,6 +480,7 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - /sys/class/net:/host/sys/class/net:ro
       - psm_storage:/opt/psm
     depends_on:
       psm-api:

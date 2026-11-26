@@ -376,7 +376,7 @@ def test_prometheus_storage_and_network_endpoints(client):
     assert "partitions" in st_data
     assert "volumes" in st_data
 
-    # 4. Network telemetry (bandwidth, interfaces, listening ports)
+    # 4. Network telemetry (bandwidth, interfaces, listening ports, active flows, ingress routes)
     net_res = client.get("/api/v1/monitoring/network", headers=headers)
     assert net_res.status_code == 200
     net_data = net_res.json()
@@ -384,6 +384,11 @@ def test_prometheus_storage_and_network_endpoints(client):
     assert "interfaces" in net_data
     assert "listening_ports" in net_data
     assert "connection_stats" in net_data
+    assert "active_flows" in net_data
+    assert "flow_summary" in net_data
+    assert "ingress_routes" in net_data
+    assert "container_network" in net_data
+    assert any(r["domain"] == "psm.homelab" for r in net_data["ingress_routes"])
 
 
 def test_project_postgres_auto_provision(client):
