@@ -9,6 +9,8 @@
 **/.venv
 **/venv
 storage/
+.build_hashes/
+.vscode/
 *.tar.gz
 *.zip
 *.db

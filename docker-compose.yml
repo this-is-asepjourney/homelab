@@ -14,6 +14,9 @@ services:
     image: mysql:8.4
     container_name: mysql
     restart: unless-stopped
+    mem_limit: 512m
+    cpu_shares: 1536
+    oom_score_adj: -500
     logging: *default-logging
     command:
       - "--innodb-buffer-pool-size=192M"
@@ -44,6 +47,9 @@ services:
     image: postgres:16-alpine
     container_name: postgres
     restart: unless-stopped
+    mem_limit: 384m
+    cpu_shares: 1536
+    oom_score_adj: -500
     logging: *default-logging
     command:
       - "postgres"
@@ -78,6 +84,9 @@ services:
     image: redis:7-alpine
     container_name: redis
     restart: unless-stopped
+    mem_limit: 160m
+    cpu_shares: 1536
+    oom_score_adj: -500
     logging: *default-logging
     command: ["redis-server", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru", "--save", "60", "100"]
     volumes:
@@ -92,6 +101,7 @@ services:
     image: pgsty/silo:latest
     container_name: minio
     restart: unless-stopped
+    mem_limit: 384m
     logging: *default-logging
     command: server /data --console-address ":9001"
     environment:
@@ -160,6 +170,7 @@ services:
     image: nextcloud:stable
     container_name: nextcloud
     restart: unless-stopped
+    mem_limit: 512m
     logging: *default-logging
     depends_on:
       postgres:
@@ -176,7 +187,7 @@ services:
       NEXTCLOUD_ADMIN_PASSWORD: ${NEXTCLOUD_ADMIN_PASSWORD:-wokeh123}
       NEXTCLOUD_TRUSTED_DOMAINS: "${SERVER_LAN_IP:-192.168.25.105} ${SERVER_TS_IP:-100.78.113.53} nextcloud.homelab localhost 127.0.0.1"
       REDIS_HOST: redis
-      PHP_MEMORY_LIMIT: 512M
+      PHP_MEMORY_LIMIT: 256M
       PHP_UPLOAD_LIMIT: 2G
     ports:
       - "8080:80"
@@ -224,6 +235,7 @@ services:
     image: prom/prometheus:latest
     container_name: prometheus
     restart: unless-stopped
+    mem_limit: 384m
     logging: *default-logging
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
@@ -255,6 +267,7 @@ services:
     image: gcr.io/cadvisor/cadvisor:latest
     container_name: cadvisor
     restart: unless-stopped
+    mem_limit: 192m
     logging: *default-logging
     privileged: true
     command:
@@ -277,6 +290,7 @@ services:
     image: grafana/grafana:latest
     container_name: grafana
     restart: unless-stopped
+    mem_limit: 256m
     logging: *default-logging
     depends_on:
       - prometheus
@@ -304,6 +318,7 @@ services:
     image: louislam/uptime-kuma:1
     container_name: uptime-kuma
     restart: unless-stopped
+    mem_limit: 256m
     logging: *default-logging
     ports:
       - "3001:3001"
@@ -316,11 +331,15 @@ services:
   # PERSONAL CLOUD MANAGEMENT PLATFORM (PAP & PSM)
   # =============================================================================
   pap-api:
+    image: homelab-pap-api:latest
     build:
       context: .
       dockerfile: Personal_Api_Platform/docker/Dockerfile
     container_name: pap-api
     restart: unless-stopped
+    mem_limit: 384m
+    cpu_shares: 1536
+    oom_score_adj: -400
     logging: *default-logging
     depends_on:
       postgres:
@@ -402,11 +421,15 @@ services:
       - homelab
 
   psm-api:
+    image: homelab-psm-api:latest
     build:
       context: ./Personal_Server_Manager
       dockerfile: infrastructure/docker/Dockerfile.api
     container_name: psm-api
     restart: unless-stopped
+    mem_limit: 384m
+    cpu_shares: 1536
+    oom_score_adj: -400
     logging: *default-logging
     depends_on:
       postgres:
@@ -459,11 +482,14 @@ services:
           - api
 
   psm-agent:
+    image: homelab-psm-agent:latest
     build:
       context: ./Personal_Server_Manager
       dockerfile: infrastructure/docker/Dockerfile.agent
     container_name: psm-agent
     restart: unless-stopped
+    mem_limit: 256m
+    cpu_shares: 512
     logging: *default-logging
     pid: host
     environment:
@@ -480,7 +506,8 @@ services:
       PSM_BUILD_NICE: "15"
       PSM_BUILD_IONICE_CLASS: "2"
       PSM_BUILD_IONICE_LEVEL: "7"
-      PSM_NODE_MAX_OLD_SPACE_MB: "1536"
+      PSM_BUILD_CGROUP_PARENT: "homelab-build.slice"
+      PSM_NODE_MAX_OLD_SPACE_MB: "896"
       PSM_APP_MEMORY_LIMIT: ""
       PSM_APP_MEMORY_SWAP: ""
       PSM_APP_CPUS: ""
@@ -513,6 +540,7 @@ services:
       - homelab
 
   psm-web:
+    image: homelab-psm-web:latest
     build:
       context: ./Personal_Server_Manager
       dockerfile: infrastructure/docker/Dockerfile.web
@@ -520,6 +548,8 @@ services:
         INTERNAL_API_URL: http://psm-api:8000
     container_name: psm-web
     restart: unless-stopped
+    mem_limit: 256m
+    cpu_shares: 768
     logging: *default-logging
     ports:
       - "3005:3005"
@@ -542,6 +572,9 @@ services:
     image: nginx:alpine
     container_name: homelab_router
     restart: unless-stopped
+    mem_limit: 128m
+    cpu_shares: 2048
+    oom_score_adj: -600
     logging: *default-logging
     ports:
       - "80:80"
@@ -559,6 +592,9 @@ services:
     image: coredns/coredns:latest
     container_name: homelab_dns
     restart: unless-stopped
+    mem_limit: 96m
+    cpu_shares: 2048
+    oom_score_adj: -600
     logging: *default-logging
     command: -conf /etc/coredns/Corefile
     environment:

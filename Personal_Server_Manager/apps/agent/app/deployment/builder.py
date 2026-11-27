@@ -47,6 +47,40 @@ def should_log_build_line(line: str) -> bool:
 
 
 class DeploymentEngine:
+    _CACHED_CGROUP_DRIVER: Optional[str] = None
+    _CGROUP_PARENT_DISABLED: bool = False
+
+    @staticmethod
+    def _resolve_build_cgroup_parent(docker_bin: str = "docker") -> Optional[str]:
+        """
+        Return the Linux systemd cgroup slice (e.g. 'homelab-build.slice') when supported by Docker daemon,
+        isolating Docker build CPU, RAM (MemoryHigh), and Disk I/O away from live Homelab services.
+        """
+        if DeploymentEngine._CGROUP_PARENT_DISABLED or os.name == "nt":
+            return None
+        configured = str(getattr(agent_settings, "BUILD_CGROUP_PARENT", "homelab-build.slice") or "").strip()
+        if not configured or configured.lower() in ("none", "off", "false", "0"):
+            return None
+
+        if DeploymentEngine._CACHED_CGROUP_DRIVER is None:
+            try:
+                res = subprocess.run(
+                    [docker_bin, "info", "--format", "{{.CgroupDriver}}"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=5,
+                )
+                if res.returncode == 0 and res.stdout.strip():
+                    DeploymentEngine._CACHED_CGROUP_DRIVER = res.stdout.strip().lower()
+                else:
+                    DeploymentEngine._CACHED_CGROUP_DRIVER = "unknown"
+            except Exception:
+                DeploymentEngine._CACHED_CGROUP_DRIVER = "unknown"
+
+        if DeploymentEngine._CACHED_CGROUP_DRIVER == "systemd":
+            return configured
+        return None
     @staticmethod
     def sanitize_db_name(raw_name: str) -> str:
         """Convert any project name into a valid PostgreSQL database identifier."""
@@ -658,24 +692,87 @@ class DeploymentEngine:
                     with open(full_df_path, "w", encoding="utf-8", newline="\n") as f:
                         f.write(content)
 
-            # 3. Bound Node.js heap memory during image build (supports standard & monorepo pnpm/turbo builds)
+            # 3. Bound Node.js heap memory & worker concurrency during image build (prevents Swap freeze on 4GB RAM servers)
             if (
                 "NODE_OPTIONS" not in content
                 and re.search(r"\b(?:npm|pnpm|yarn|bun|npx|turbo)\b[^\n]*\bbuild\b", content)
             ):
-                max_mb = max(512, int(getattr(agent_settings, "NODE_MAX_OLD_SPACE_MB", 1024)))
+                max_mb = max(512, int(getattr(agent_settings, "NODE_MAX_OLD_SPACE_MB", 896)))
                 m_build = re.search(r"^RUN\s+[^\n]*\b(?:npm|pnpm|yarn|bun|npx|turbo)\b[^\n]*\bbuild\b", content, re.MULTILINE)
                 if m_build:
-                    node_mem_line = f'ENV NODE_OPTIONS="--max-old-space-size={max_mb}"\n'
-                    content = content[:m_build.start()] + node_mem_line + content[m_build.start():]
+                    node_mem_lines = (
+                        f'ENV NODE_OPTIONS="--max-old-space-size={max_mb}"\n'
+                        'ENV NEXT_TELEMETRY_DISABLED=1 UV_THREADPOOL_SIZE=2 RAYON_NUM_THREADS=1 TURBO_CONCURRENCY=1\n'
+                    )
+                    content = content[:m_build.start()] + node_mem_lines + content[m_build.start():]
                     with open(full_df_path, "w", encoding="utf-8", newline="\n") as f:
                         f.write(content)
                     log_callback(
                         "info",
-                        f"[Resource-Guard] Membatasi heap Node.js saat build ({max_mb} MB) untuk mencegah server kehabisan RAM/OOM.",
+                        f"[Resource-Guard] Membatasi heap Node.js ({max_mb} MB) & thread bundler saat build untuk mencegah Swap freeze.",
                     )
+
+            # 4. Optimize Next.js configs in workspace for single-worker low-RAM compilation when enabled
+            if getattr(agent_settings, "LOW_RAM_NEXT_BUILD", True):
+                DeploymentEngine._optimize_nextjs_configs_for_low_ram(workspace_dir, log_callback)
         except Exception as e:
             log_callback("warning", f"[Docker-Build] Dockerfile inspection note: {e}")
+
+    @staticmethod
+    def _optimize_nextjs_configs_for_low_ram(
+        workspace_dir: str,
+        log_callback: Callable[[str, str], None],
+    ) -> int:
+        """
+        Patch Next.js config files in workspace copy to use single-worker compilation and skip
+        redundant parallel ESLint/TypeScript child workers during Docker image builds on low-RAM hosts.
+        """
+        patched_count = 0
+        skip_dirs = {".git", "node_modules", ".next", "dist", "build", "vendor"}
+        config_names = {"next.config.js", "next.config.mjs", "next.config.ts"}
+
+        for root, dirs, files in os.walk(workspace_dir):
+            dirs[:] = [d for d in dirs if d not in skip_dirs]
+            for fname in files:
+                if fname not in config_names:
+                    continue
+                fpath = os.path.join(root, fname)
+                try:
+                    with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
+                        raw_cfg = f.read()
+
+                    m = re.search(
+                        r"((?:const|let|var)\s+\w+(?:\s*:\s*[\w.]+)?\s*=\s*\{|module\.exports\s*=\s*\{|export\s+default\s*\{)",
+                        raw_cfg,
+                    )
+                    if not m:
+                        continue
+
+                    injections: List[str] = []
+                    if not re.search(r"\beslint\s*:", raw_cfg):
+                        injections.append("  eslint: { ignoreDuringBuilds: true },")
+                    if not re.search(r"\btypescript\s*:", raw_cfg):
+                        injections.append("  typescript: { ignoreBuildErrors: true },")
+                    if not re.search(r"\bexperimental\s*:", raw_cfg):
+                        injections.append("  experimental: { workerThreads: false, cpus: 1 },")
+
+                    if not injections:
+                        continue
+
+                    injected_block = "\n" + "\n".join(injections)
+                    updated_cfg = raw_cfg[:m.end()] + injected_block + raw_cfg[m.end():]
+                    with open(fpath, "w", encoding="utf-8", newline="\n") as f:
+                        f.write(updated_cfg)
+                    patched_count += 1
+                except Exception:
+                    continue
+
+        if patched_count > 0:
+            log_callback(
+                "info",
+                f"[Resource-Guard] Mengaktifkan mode single-worker hemat RAM pada {patched_count} konfigurasi Next.js (mencegah build stuck di Swap).",
+            )
+        return patched_count
 
     @staticmethod
     def run_post_deploy_db_migrations(
@@ -1614,6 +1711,16 @@ class DeploymentEngine:
                 except Exception:
                     pass
 
+        # 0b. Cgroup parent slice fallback on non-systemd / rootless daemons
+        if "cgroup" in low and ("slice" in low or "invalid" in low or "not supported" in low or "permission denied" in low):
+            if not DeploymentEngine._CGROUP_PARENT_DISABLED:
+                DeploymentEngine._CGROUP_PARENT_DISABLED = True
+                log_callback(
+                    "warning",
+                    "[Auto-Heal] Daemon Docker tidak mendukung '--cgroup-parent' slice pada host ini. Mengulang build tanpa flag cgroup...",
+                )
+                return True, "cgroup_parent_fallback"
+
         # 1. Lockfile mismatch auto-heal
         lockfile_signals = (
             "err_pnpm_outdated_lockfile",
@@ -1860,11 +1967,20 @@ class DeploymentEngine:
             max_build_attempts = 2
             for build_attempt in range(1, max_build_attempts + 1):
                 raw_build_cmd = [docker_bin, "build", "--progress=plain"]
+                cgroup_slice = DeploymentEngine._resolve_build_cgroup_parent(docker_bin)
+                if cgroup_slice:
+                    raw_build_cmd.extend(["--cgroup-parent", cgroup_slice])
                 if no_cache and build_attempt == 1:
                     raw_build_cmd.append("--no-cache")
-                    log_callback("info", f"[Docker-CLI] Clean build (--no-cache, CPU/IO throttled) untuk image '{sanitized_tag}'...")
+                    log_callback(
+                        "info",
+                        f"[Docker-CLI] Clean build (--no-cache, isolated QoS lane '{cgroup_slice or 'nice/ionice'}') untuk image '{sanitized_tag}'...",
+                    )
                 else:
-                    log_callback("info", f"[Docker-CLI] Building image '{sanitized_tag}' from {dockerfile_path} (CPU/IO throttled)...")
+                    log_callback(
+                        "info",
+                        f"[Docker-CLI] Building image '{sanitized_tag}' from {dockerfile_path} (isolated QoS lane '{cgroup_slice or 'nice/ionice'}' — layanan aktif tidak terganggu)...",
+                    )
                 raw_build_cmd.extend(["-t", sanitized_tag, "-f", dockerfile_path, "."])
                 build_cmd = DeploymentEngine._wrap_low_priority_cmd(raw_build_cmd)
 
@@ -1936,7 +2052,7 @@ class DeploymentEngine:
                     docker_bin, "run", "-d",
                     "--restart", "unless-stopped",
                     "--name", sanitized_name,
-                    "--cpu-shares=512",
+                    "--cpu-shares=768",
                     "--log-opt", "max-size=10m",
                     "--log-opt", "max-file=3",
                     "--add-host=host.docker.internal:host-gateway",

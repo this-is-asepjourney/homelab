@@ -537,7 +537,12 @@ def test_serialized_deployment_guard_and_build_throttling(tmp_path, monkeypatch)
     assert 'ENV NODE_OPTIONS="--max-old-space-size=' in patched
     assert patched.index("NODE_OPTIONS") < patched.index("RUN npm run build")
 
-    # 4. Monorepo pnpm --filter build also receives NODE_OPTIONS heap cap
+    # 4. Monorepo pnpm --filter build also receives NODE_OPTIONS + thread guard & Next.js low-RAM patch
+    mono_web = tmp_path / "apps" / "web"
+    mono_web.mkdir(parents=True, exist_ok=True)
+    next_cfg = mono_web / "next.config.ts"
+    next_cfg.write_text("import type { NextConfig } from 'next';\nconst nextConfig: NextConfig = {\n  output: 'standalone',\n};\nexport default nextConfig;\n")
+
     mono_df = tmp_path / "Dockerfile.mono"
     mono_df.write_text("FROM node:22-alpine AS builder\nRUN pnpm --filter web build\n")
     DeploymentEngine.prepare_dockerfile_environment(
@@ -545,7 +550,12 @@ def test_serialized_deployment_guard_and_build_throttling(tmp_path, monkeypatch)
         dockerfile_path="Dockerfile.mono",
         log_callback=lambda lvl, msg: prep_logs.append((lvl, msg)),
     )
-    assert "NODE_OPTIONS" in mono_df.read_text()
+    mono_df_text = mono_df.read_text()
+    assert "NODE_OPTIONS" in mono_df_text
+    assert "UV_THREADPOOL_SIZE=2" in mono_df_text
+    patched_next = next_cfg.read_text()
+    assert "workerThreads: false, cpus: 1" in patched_next
+    assert "ignoreBuildErrors: true" in patched_next
 
     # 5. Auto-heal strips `--mount=type=cache` when legacy builder rejects BuildKit mount syntax
     bk_df = tmp_path / "Dockerfile.archflow"
@@ -564,6 +574,24 @@ def test_serialized_deployment_guard_and_build_throttling(tmp_path, monkeypatch)
     cleaned_bk = bk_df.read_text()
     assert "--mount=type=cache" not in cleaned_bk
     assert "RUN pnpm install --frozen-lockfile" in cleaned_bk
+
+    # 6. Cgroup slice isolation resolver & auto-heal fallback
+    monkeypatch.setattr(os, "name", "posix", raising=False)
+    DeploymentEngine._CACHED_CGROUP_DRIVER = "systemd"
+    DeploymentEngine._CGROUP_PARENT_DISABLED = False
+    assert DeploymentEngine._resolve_build_cgroup_parent("docker") == "homelab-build.slice"
+
+    healed_cg, kind_cg = DeploymentEngine._attempt_build_auto_heal(
+        workspace_dir=str(tmp_path),
+        dockerfile_path="Dockerfile.archflow",
+        build_output="Error: cgroup slice invalid or not supported on rootless daemon",
+        log_callback=lambda lvl, msg: prep_logs.append((lvl, msg)),
+    )
+    assert healed_cg is True
+    assert kind_cg == "cgroup_parent_fallback"
+    assert DeploymentEngine._resolve_build_cgroup_parent("docker") is None
+    DeploymentEngine._CACHED_CGROUP_DRIVER = None
+    DeploymentEngine._CGROUP_PARENT_DISABLED = False
 
 
 def test_resolve_app_resource_limits(monkeypatch):

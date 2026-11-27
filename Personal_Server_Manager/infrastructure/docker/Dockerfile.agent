@@ -1,9 +1,18 @@
-FROM python:3.13-slim
+# syntax=docker/dockerfile:1
+# Standardized on python:3.12-slim (shared base layer with pap-api & psm-api)
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app
+ENV DOCKER_BUILDKIT=1
 
 WORKDIR /app
 
-# Install system dependencies, Git, CPU/IO scheduler tools (nice/ionice), and official Docker CLI + Buildx + Compose
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Install Git, CPU/IO scheduler tools (nice/ionice), and official Docker CLI + Buildx + Compose with cached apt packages
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
     gnupg \
@@ -22,15 +31,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         || (echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian bookworm stable" > /etc/apt/sources.list.d/docker.list \
             && apt-get update && apt-get install -y --no-install-recommends \
                docker-ce-cli docker-compose-plugin docker-buildx-plugin) \
-        || apt-get install -y --no-install-recommends docker.io docker-buildx docker-compose) \
-    && rm -rf /var/lib/apt/lists/*
+        || apt-get install -y --no-install-recommends docker.io docker-buildx docker-compose)
 
 COPY apps/agent/requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+RUN --mount=type=cache,id=psm-pip-cache,target=/root/.cache/pip \
+    pip install --prefer-binary -r requirements.txt
 
 COPY apps/agent/ apps/agent/
-
-ENV PYTHONPATH=/app
-ENV DOCKER_BUILDKIT=1
 
 CMD ["python", "-m", "apps.agent.app.main"]
