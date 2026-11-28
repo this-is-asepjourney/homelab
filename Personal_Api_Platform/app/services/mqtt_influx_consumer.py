@@ -44,6 +44,8 @@ class MqttPgConsumer:
             ("Eternal/SysCtrl", 0),
             ("/Eternal/telemetry", 0),
             ("Eternal/telemetry", 0),
+            ("/Eternal/attendance", 0),
+            ("Eternal/attendance", 0),
             ("/Eternal/rfid", 0),
             ("/Eternal/lock", 0),
             ("/Eternal/#", 0),
@@ -53,6 +55,8 @@ class MqttPgConsumer:
             ("eternal/#", 0),
             ("eternal/telemetry", 0),
             ("/eternal/telemetry", 0),
+            ("/eternal/attendance", 0),
+            ("eternal/attendance", 0),
             ("eternal/rfid", 0),
             ("/eternal/rfid", 0),
             ("eternal/lock", 0),
@@ -187,61 +191,106 @@ class MqttPgConsumer:
             or "ETL-ESP32-001"
         )
         self.devices_last_seen[str(device_serial)] = time.time()
-        device_name = data.get("device") or data.get("nama") or "Eternal"
+        device_name = data.get("device") or "Eternal Absensi Kerja"
         model = data.get("model") or data.get("IOT_MODEL") or "Eternal-ESP32"
 
-        # 1. Handle NFC RFID Tap Events
-        is_rfid_topic = topic.lower().rstrip("/").endswith("/rfid") or data.get("event") == "nfc_tap"
+        topic_norm = topic.lower().rstrip("/")
+        event_up = str(data.get("event") or "").strip().upper()
+        is_attendance_topic = topic_norm.endswith("/attendance") or event_up in (
+            "WORK_CHECK_IN",
+            "WORK_CHECK_OUT",
+            "AUTO_CHECKOUT",
+            "MQTT_REMOTE_CHECKIN",
+            "MQTT_REMOTE_CHECKOUT",
+        )
+        is_rfid_topic = (topic_norm.endswith("/rfid") or event_up == "NFC_TAP") and not is_attendance_topic
+
+        # 1a. Handle Dedicated Work Attendance Events (/Eternal/attendance)
+        if is_attendance_topic and data.get("uid"):
+            uid = data.get("uid")
+            user_name = data.get("nama") or data.get("user") or "Pekerja NFC"
+            role = data.get("role") or "Operator"
+            att_res = {}
+            try:
+                att_payload = dict(data)
+                att_payload.setdefault("device_serial", str(device_serial))
+                att_payload.setdefault("device_ip", str(data.get("ip") or data.get("MCIP") or "192.168.25.104"))
+                att_res = NfcService.record_tap_event(att_payload)
+                logger.info(
+                    f"[MQTT->PostgreSQL] Attendance {att_res.get('action')} for {user_name} ({uid}) -> eternal_iot"
+                )
+            except Exception as e:
+                logger.debug(f"[MQTT->PostgreSQL Attendance] Error: {e}")
+
+            try:
+                from app.integrations.prometheus import record_nfc_tap_prometheus_metric
+                record_nfc_tap_prometheus_metric(device_serial=str(device_serial), role=str(role))
+            except Exception:
+                pass
+
+            try:
+                from app.modules.traffic.broadcaster import traffic_broadcaster
+                is_working = att_res.get("work_status") == "WORKING"
+                dur_hms = data.get("work_duration_hms") or att_res.get("action") or event_up
+                traffic_broadcaster.record_and_broadcast(
+                    method="ATTENDANCE",
+                    path=topic,
+                    status=200,
+                    duration_ms=1.6,
+                    client_ip=str(data.get("ip") or "192.168.25.104"),
+                    source="esp32",
+                    target="core",
+                    sub_target="postgres",
+                    tag="WORK_ATTENDANCE",
+                    color="#34d399" if is_working else "#38bdf8",
+                    detail=f"ESP32 -> Core -> PostgreSQL eternal_iot [{user_name} ({role}) | {dur_hms}]",
+                )
+            except Exception:
+                pass
+
+        # 1b. Handle NFC RFID Tap Events (/Eternal/rfid)
         if is_rfid_topic and data.get("status") != "registered" and data.get("action") != "REGISTER_USER":
             uid = data.get("uid")
             if uid:
                 user_name = data.get("nama") or data.get("user") or "Tamu"
-                username = data.get("username") or "-"
                 role = data.get("role") or "Operator"
-                action = data.get("action") or data.get("action_type") or data.get("event") or "TAP_ON"
-                duration = int(data.get("remaining_sec") or data.get("lock_duration_sec") or 7200)
-
+                tap_res = {}
                 try:
-                    NfcService.record_tap_event({
-                        "uid": uid,
-                        "nama": user_name,
-                        "username": username,
-                        "role": role,
-                        "action_type": action,
-                        "lock_duration_sec": duration,
-                        "device_serial": str(device_serial),
-                        "device_ip": str(data.get("ip") or "192.168.25.104")
-                    })
+                    rfid_payload = dict(data)
+                    rfid_payload.setdefault("device_serial", str(device_serial))
+                    rfid_payload.setdefault("device_ip", str(data.get("ip") or data.get("MCIP") or "192.168.25.104"))
+                    tap_res = NfcService.record_tap_event(rfid_payload)
                     logger.info(f"[MQTT->PostgreSQL] Recorded NFC event for {user_name} ({uid}) -> PostgreSQL")
                 except Exception as e:
                     logger.debug(f"[MQTT->PostgreSQL NFC Tap] Error: {e}")
 
                 try:
                     from app.integrations.prometheus import record_nfc_tap_prometheus_metric
-                    record_nfc_tap_prometheus_metric(device_serial=str(device_serial), role=role)
+                    record_nfc_tap_prometheus_metric(device_serial=str(device_serial), role=str(role))
                 except Exception:
                     pass
 
                 # Broadcast live event to Architecture Map UI
                 try:
                     from app.modules.traffic.broadcaster import traffic_broadcaster
+                    denied = tap_res.get("work_status") == "DENIED" or data.get("status") == "denied"
                     traffic_broadcaster.record_and_broadcast(
                         method="NFC_TAP",
                         path=topic,
-                        status=200 if data.get("status") != "denied" else 403,
+                        status=403 if denied else 200,
                         duration_ms=1.8,
-                        client_ip="192.168.25.104",
+                        client_ip=str(data.get("ip") or "192.168.25.104"),
                         source="esp32",
                         target="core",
-                        sub_target="postgresql",
+                        sub_target="postgres",
                         tag="NFC_AUTH",
-                        color="#34d399" if data.get("status") != "denied" else "#ef4444",
-                        detail=f"ESP32 -> Core -> PostgreSQL eternal_iot [UID: {uid} | {user_name} ({role})]"
+                        color="#ef4444" if denied else "#34d399",
+                        detail=f"ESP32 -> Core -> PostgreSQL eternal_iot [UID: {uid} | {user_name} ({role})]",
                     )
                 except Exception:
                     pass
 
-        # 2. Handle Telemetry & Lock State
+        # 2. Handle Telemetry & Work Attendance State
         f = self._parse_telemetry(data)
         has_data = any(v is not None for v in f.values())
         if has_data:
@@ -262,6 +311,16 @@ class MqttPgConsumer:
                 ssid=data.get("ap") or data.get("ssid"),
                 firmware=data.get("VER"),
                 air_quality=data.get("air_quality"),
+                work_status=f["work_status"],
+                last_work_duration_sec=f["last_work_duration_sec"],
+                last_work_duration_str=f["last_work_duration_str"],
+                total_work_sec=f["total_work_sec"],
+                total_work_sessions=f["total_work_sessions"],
+                active_uid=f["active_uid"],
+                active_user=f["active_user"],
+                active_username=f["active_username"],
+                active_role=f["active_role"],
+                check_in_time=f["check_in_time"],
             )
 
             # Update live Prometheus metrics for Prometheus dashboards
@@ -293,7 +352,7 @@ class MqttPgConsumer:
                     client_ip=str(data.get("ip") or "192.168.25.104"),
                     source="esp32",
                     target="mqtt",
-                    sub_target="postgresql",
+                    sub_target="postgres",
                     tag="TELEMETRY",
                     color="#06b6d4",
                     detail=f"ESP32 -> Mosquitto {topic} -> PostgreSQL eternal_iot"
@@ -313,14 +372,41 @@ class MqttPgConsumer:
                         return None
             return None
 
+        def _text(*keys) -> Optional[str]:
+            for k in keys:
+                v = payload.get(k)
+                if v is not None:
+                    s = str(v).strip()
+                    if s and s not in ("-", "null", "None"):
+                        return s
+            return None
+
+        work_active_val = payload.get("work_active")
         is_locked_val = payload.get("is_locked")
-        if is_locked_val is not None:
-            is_locked = 1 if is_locked_val in (1, True, "1", "true") else 0
-        elif payload.get("lock_status") is not None:
-            lock_str = str(payload.get("lock_status", "")).upper()
-            is_locked = 0 if ("UNLOCK" in lock_str or "OPEN" in lock_str) else 1
+        work_status_raw = _text("work_status", "lock_status")
+
+        if work_active_val is not None:
+            is_locked = 0 if work_active_val in (1, True, "1", "true", "TRUE") else 1
+        elif is_locked_val is not None:
+            is_locked = 1 if is_locked_val in (1, True, "1", "true", "TRUE") else 0
+        elif work_status_raw is not None:
+            lock_str = work_status_raw.upper()
+            is_locked = 0 if ("WORKING" in lock_str or "UNLOCK" in lock_str or "OPEN" in lock_str) else 1
         else:
             is_locked = None
+
+        if work_status_raw:
+            ws_up = work_status_raw.upper()
+            if "WORKING" in ws_up or "UNLOCK" in ws_up:
+                work_status = "WORKING"
+            elif "COMPLETED" in ws_up or "STANDBY" in ws_up or "LOCK" in ws_up:
+                work_status = "STANDBY"
+            else:
+                work_status = ws_up
+        elif is_locked is not None:
+            work_status = "WORKING" if is_locked == 0 else "STANDBY"
+        else:
+            work_status = None
 
         temp = _num("suhu", "temperature", "temp", "temperature_c", "t")
         hum = _num("humidity", "hum", "kelembapan", "humidity_pct", "h")
@@ -328,13 +414,26 @@ class MqttPgConsumer:
         if heat_idx is None and temp is not None and temp > 0:
             heat_idx = temp
 
+        work_elapsed_sec = _num("work_elapsed_sec", "remaining_sec", "lock_duration_sec", "remaining", cast=int)
+
         return {
             "temperature": temp,
             "humidity": hum,
             "heat_index": heat_idx,
             "rssi": _num("rssi", "wifi_rssi", "wifiRssi", cast=int),
             "is_locked": is_locked,
-            "remaining_sec": _num("remaining_sec", "lock_duration_sec", "remaining", cast=int),
+            "work_status": work_status,
+            "work_elapsed_sec": work_elapsed_sec,
+            "remaining_sec": work_elapsed_sec,
+            "last_work_duration_sec": _num("last_work_duration_sec", "work_duration_sec", cast=int),
+            "last_work_duration_str": _text("last_work_duration_str", "work_duration_hms"),
+            "total_work_sec": _num("total_work_sec", cast=int),
+            "total_work_sessions": _num("total_work_sessions", cast=int),
+            "active_uid": _text("active_uid", "uid"),
+            "active_user": _text("active_user", "user", "nama"),
+            "active_username": _text("active_username", "username"),
+            "active_role": _text("active_role", "role"),
+            "check_in_time": _text("check_in_time"),
             "uptime_sec": _num("uptime_sec", "uptime", "upTime", cast=int),
             "free_heap": _num("free_heap", "heap", "freeHeap", cast=int),
         }
@@ -357,6 +456,16 @@ class MqttPgConsumer:
         ssid=None,
         firmware=None,
         air_quality=None,
+        work_status=None,
+        last_work_duration_sec=None,
+        last_work_duration_str=None,
+        total_work_sec=None,
+        total_work_sessions=None,
+        active_uid=None,
+        active_user=None,
+        active_username=None,
+        active_role=None,
+        check_in_time=None,
     ):
         """Keep PostgreSQL `eternal_iot` snapshot & logs in sync with incoming MQTT telemetry."""
         conn = None
@@ -403,11 +512,13 @@ class MqttPgConsumer:
 
                 # 2. Append time-series point to iot_telemetry_logs
                 if temp is not None and hum is not None:
+                    work_active_int = 1 if is_locked == 0 else 0
+                    elapsed_int = (rem_sec or 0) if is_locked == 0 else 0
                     cur.execute("""
                         INSERT INTO iot_telemetry_logs
                             (device_serial, temperature_c, humidity_pct, heat_index_c, wifi_rssi,
-                             is_locked, remaining_sec, uptime_sec, free_heap, recorded_at)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW());
+                             is_locked, work_active, work_elapsed_sec, remaining_sec, uptime_sec, free_heap, recorded_at)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW());
                     """, (
                         device_serial,
                         temp or 0.0,
@@ -415,24 +526,59 @@ class MqttPgConsumer:
                         heat_idx or 0.0,
                         rssi or 0,
                         is_locked if is_locked is not None else 1,
-                        rem_sec or 0,
+                        work_active_int,
+                        elapsed_int,
+                        elapsed_int,
                         uptime or 0,
                         heap or 0,
                     ))
 
-                # 3. Update device_locks if is_locked is present
+                # 3. Update device_locks (attendance live status snapshot)
                 if is_locked is not None:
-                    lock_str = "LOCKED" if is_locked == 1 else "UNLOCKED"
+                    eff_status = work_status or ("WORKING" if is_locked == 0 else "STANDBY")
+                    elapsed_val = (rem_sec or 0) if is_locked == 0 else 0
+                    clean_user = None if active_user in (None, "", "-", "Standby") else active_user
                     cur.execute("""
                         INSERT INTO device_locks
-                            (device_serial, device_name, is_locked, lock_status, unlock_duration_sec, updated_at)
-                        VALUES (%s, %s, %s, %s, %s, NOW())
+                            (device_serial, device_name, is_locked, lock_status, work_status, work_elapsed_sec,
+                             last_work_duration_sec, last_work_duration_str, total_work_sec, total_work_sessions,
+                             check_in_time, unlocked_by_uid, unlocked_by_name, unlocked_by_username, unlocked_by_role,
+                             unlock_duration_sec, updated_at)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
                         ON CONFLICT (device_serial) DO UPDATE
                         SET is_locked = EXCLUDED.is_locked,
                             lock_status = EXCLUDED.lock_status,
-                            unlock_duration_sec = COALESCE(EXCLUDED.unlock_duration_sec, device_locks.unlock_duration_sec),
+                            work_status = EXCLUDED.work_status,
+                            work_elapsed_sec = EXCLUDED.work_elapsed_sec,
+                            last_work_duration_sec = COALESCE(NULLIF(EXCLUDED.last_work_duration_sec, 0), device_locks.last_work_duration_sec),
+                            last_work_duration_str = COALESCE(NULLIF(EXCLUDED.last_work_duration_str, ''), device_locks.last_work_duration_str),
+                            total_work_sec = GREATEST(COALESCE(device_locks.total_work_sec, 0), COALESCE(EXCLUDED.total_work_sec, 0)),
+                            total_work_sessions = GREATEST(COALESCE(device_locks.total_work_sessions, 0), COALESCE(EXCLUDED.total_work_sessions, 0)),
+                            check_in_time = COALESCE(EXCLUDED.check_in_time, device_locks.check_in_time),
+                            unlocked_by_uid = COALESCE(EXCLUDED.unlocked_by_uid, device_locks.unlocked_by_uid),
+                            unlocked_by_name = COALESCE(EXCLUDED.unlocked_by_name, device_locks.unlocked_by_name),
+                            unlocked_by_username = COALESCE(EXCLUDED.unlocked_by_username, device_locks.unlocked_by_username),
+                            unlocked_by_role = COALESCE(EXCLUDED.unlocked_by_role, device_locks.unlocked_by_role),
+                            unlock_duration_sec = EXCLUDED.unlock_duration_sec,
                             updated_at = NOW();
-                    """, (device_serial, device_name, is_locked, lock_str, rem_sec or 7200))
+                    """, (
+                        device_serial,
+                        device_name,
+                        is_locked,
+                        eff_status,
+                        eff_status,
+                        elapsed_val,
+                        last_work_duration_sec or 0,
+                        last_work_duration_str or "00:00:00",
+                        total_work_sec or 0,
+                        total_work_sessions or 0,
+                        check_in_time,
+                        active_uid,
+                        clean_user,
+                        active_username,
+                        active_role,
+                        elapsed_val,
+                    ))
         except Exception as e:
             logger.debug(f"[MQTT->PostgreSQL Sync] Error: {e}")
         finally:

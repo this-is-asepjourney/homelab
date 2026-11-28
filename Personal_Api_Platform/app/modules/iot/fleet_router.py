@@ -808,6 +808,35 @@ def register_nfc_user_from_device(payload: dict):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@compat_devices_router.post("/api/nfc/users/delete")
+@compat_devices_router.post("/nfc/users/delete")
+def delete_nfc_user_from_device(payload: dict):
+    """Handle hardware user deletion push (prevents infinite push-back loops)."""
+    from app.modules.iot.nfc_service import NfcService
+    uid = str((payload or {}).get("uid") or "").strip()
+    if not uid:
+        raise HTTPException(status_code=400, detail="UID wajib diisi")
+    try:
+        ok = NfcService.delete_user(uid, push_to_hardware=False)
+        return {"status": "success", "deleted": ok, "uid": uid}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@compat_devices_router.get("/api/nfc/attendance")
+def list_work_attendance(
+    limit: int = Query(50, ge=1, le=200),
+    device_serial: Optional[str] = Query(None),
+):
+    """Fetch work attendance check-in/check-out sessions."""
+    from app.modules.iot.nfc_service import NfcService
+    try:
+        sessions = NfcService.list_attendance_sessions(limit=limit, device_serial=device_serial)
+        return {"status": "success", "data": sessions, "total": len(sessions)}
+    except Exception as e:
+        return {"status": "error", "message": str(e), "data": []}
+
+
 @compat_devices_router.post("/api/nfc/handshake")
 @compat_devices_router.post("/nfc/handshake")
 def nfc_hardware_handshake(payload: dict):
