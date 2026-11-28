@@ -1,5 +1,6 @@
 """HTTP router for liveness, readiness, system info, version, and Prometheus metrics scrape."""
 
+import os
 from datetime import datetime, timezone
 import time
 from typing import Any, Dict, Optional
@@ -96,9 +97,32 @@ def receive_worker_heartbeat(payload: WorkerHeartbeatPayload):
 
 @router.get("/system/worker-status")
 def get_worker_status():
-    """Returns the operational status of the decoupled pap-worker background engine."""
+    """Returns the operational status of the background engine (external pap-worker or in-process MQTT->PG consumer)."""
     global _latest_worker_heartbeat
     if not _latest_worker_heartbeat:
+        enable_mqtt = os.getenv("ENABLE_MQTT_CONSUMER", "true").lower() in ("true", "1", "yes")
+        try:
+            from app.services.mqtt_influx_consumer import mqtt_influx_consumer
+            if mqtt_influx_consumer.is_running or enable_mqtt:
+                status_str = "in_process_active" if mqtt_influx_consumer.is_running else "standby"
+                return success_response(
+                    data={
+                        "status": status_str,
+                        "healthy": bool(mqtt_influx_consumer.is_running),
+                        "role": "in_process_consumer",
+                        "details": {
+                            "mqtt_connected": bool(mqtt_influx_consumer.connected),
+                            "mqtt_messages_processed": int(mqtt_influx_consumer.messages_count),
+                            "last_mqtt_topic": mqtt_influx_consumer.last_topic,
+                            "last_mqtt_at": mqtt_influx_consumer.last_message_at,
+                            "devices_tracked": len(mqtt_influx_consumer.devices_last_seen),
+                            "target_db": "eternal_iot",
+                        },
+                    },
+                    message="In-process MQTT->PostgreSQL consumer status retrieved successfully",
+                )
+        except Exception:
+            pass
         return success_response(
             data={
                 "status": "not_registered",
@@ -124,12 +148,26 @@ def get_worker_status():
 
 
 @router.get("/system/central-pulse")
-def get_public_central_pulse(db: Session = Depends(get_db)):
+def get_public_central_pulse(refresh: bool = False, db: Session = Depends(get_db)):
     """Lightweight cached Central Hub pulse for PAP Mission Control UI and PSM Dashboard."""
     from app.modules.infra.service import InfraService
-    pulse = InfraService(db).get_central_pulse()
+    pulse = InfraService(db).get_central_pulse(force_refresh=refresh)
     return success_response(
         data=pulse,
         message="Central Hub pulse retrieved successfully",
+    )
+
+
+@router.get("/system/services")
+def get_public_services_catalog(refresh: bool = False, db: Session = Depends(get_db)):
+    """Public cached service catalog with LAN, Tailscale, and .homelab URLs for Mission Control UI."""
+    from app.core.hub_cache import hub_cache
+    from app.modules.infra.service import InfraService
+    if refresh:
+        hub_cache.invalidate("infra:")
+    services = InfraService(db).list_services()
+    return success_response(
+        data=services,
+        message="Homelab service catalog retrieved successfully",
     )
 

@@ -3,389 +3,372 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>PAP Core — Homelab Central API Gateway & Realtime Project Topology</title>
+  <title>PAP Core — Homelab Central Engine &amp; Mission Control</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🛡️</text></svg>">
   <style>
     :root {
-      --bg-dark: #070b14;
-      --bg-surface: #0d1527;
-      --bg-card: #131d33;
-      --bg-card-hover: #1c2b4a;
-      --border-color: #202f4f;
-      --border-glow: rgba(59, 130, 246, 0.4);
+      --bg-dark: #060a14;
+      --bg-surface: #0b1222;
+      --bg-card: #111a2e;
+      --bg-card-alt: #0d1527;
+      --border-color: #1f2e4d;
+      --border-strong: #2d426b;
       --text-main: #f8fafc;
       --text-muted: #94a3b8;
+      --text-dim: #64748b;
       --primary: #3b82f6;
-      --primary-glow: #60a5fa;
       --primary-hover: #2563eb;
       --cyan: #06b6d4;
-      --cyan-glow: #22d3ee;
       --success: #10b981;
-      --success-glow: #34d399;
       --warning: #f59e0b;
-      --warning-glow: #fbbf24;
       --danger: #ef4444;
       --purple: #8b5cf6;
-      --purple-glow: #a78bfa;
+      --rose: #f43f5e;
       --radius: 12px;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
-    body { background-color: var(--bg-dark); color: var(--text-main); min-height: 100vh; display: flex; flex-direction: column; overflow-x: hidden; }
+    body { background: radial-gradient(circle at 15% 0%, #0e1a36 0%, var(--bg-dark) 45%); color: var(--text-main); min-height: 100vh; display: flex; flex-direction: column; overflow-x: hidden; }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 0.85em; background: rgba(15, 23, 42, 0.8); padding: 0.12rem 0.4rem; border-radius: 5px; border: 1px solid rgba(59, 130, 246, 0.2); color: #93c5fd; }
 
     /* HEADER */
     header {
-      background: linear-gradient(180deg, #0f1a30 0%, #0d1527 100%);
+      background: rgba(10, 17, 34, 0.92);
+      backdrop-filter: blur(10px);
       border-bottom: 1px solid var(--border-color);
-      padding: 0.9rem 1.5rem;
+      padding: 0.85rem 1.5rem;
       display: flex;
       justify-content: space-between;
       align-items: center;
       flex-wrap: wrap;
-      gap: 1rem;
-      box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+      gap: 0.85rem;
       position: sticky;
       top: 0;
-      z-index: 50;
+      z-index: 60;
+      box-shadow: 0 6px 24px rgba(0,0,0,0.45);
     }
     .brand { display: flex; align-items: center; gap: 0.85rem; }
     .brand-icon {
-      font-size: 1.8rem;
+      font-size: 1.65rem;
       background: linear-gradient(135deg, #2563eb, #7c3aed);
-      border-radius: 10px;
-      padding: 6px 10px;
+      border-radius: 11px;
+      padding: 7px 11px;
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      box-shadow: 0 0 15px rgba(59, 130, 246, 0.5);
+      box-shadow: 0 0 18px rgba(59, 130, 246, 0.45);
     }
     .brand-title {
-      font-size: 1.25rem;
+      font-size: 1.2rem;
       font-weight: 800;
-      letter-spacing: -0.5px;
+      letter-spacing: -0.4px;
       background: linear-gradient(90deg, #ffffff, #93c5fd);
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
     }
-    .brand-subtitle { font-size: 0.75rem; color: var(--text-muted); }
-    .header-badges { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+    .brand-subtitle { font-size: 0.74rem; color: var(--text-muted); }
+    .header-right { display: flex; align-items: center; gap: 0.55rem; flex-wrap: wrap; }
+
+    /* BADGES & PILLS */
     .badge {
       display: inline-flex;
       align-items: center;
       gap: 0.4rem;
-      padding: 0.35rem 0.75rem;
+      padding: 0.3rem 0.7rem;
       border-radius: 9999px;
-      font-size: 0.75rem;
+      font-size: 0.73rem;
       font-weight: 600;
+      white-space: nowrap;
     }
-    .badge-success { background-color: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); }
-    .badge-info { background-color: rgba(59, 130, 246, 0.15); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.3); }
-    .badge-cyan { background-color: rgba(6, 182, 212, 0.15); color: #22d3ee; border: 1px solid rgba(6, 182, 212, 0.3); }
-    .badge-purple { background-color: rgba(139, 92, 246, 0.15); color: #c084fc; border: 1px solid rgba(139, 92, 246, 0.3); }
-    .badge-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background-color: currentColor;
-      display: inline-block;
-      box-shadow: 0 0 8px currentColor;
-    }
-    .pulse-dot {
-      animation: pulse 1.5s infinite;
-    }
-    .pulse-dot-red {
-      background-color: #ef4444 !important;
-      box-shadow: 0 0 10px #ef4444 !important;
-      animation: pulseRed 1.2s infinite !important;
-    }
-    @keyframes pulseRed {
-      0% { transform: scale(0.95); opacity: 0.8; }
-      50% { transform: scale(1.35); opacity: 1; }
-      100% { transform: scale(0.95); opacity: 0.8; }
-    }
-    .topo-node {
-      transition: filter 0.2s cubic-bezier(0.16, 1, 0.3, 1), transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-      transform-origin: center;
-      cursor: pointer;
-    }
-    .topo-node:hover {
-      filter: drop-shadow(0 0 14px rgba(96, 165, 250, 0.7));
-    }
-    .stream-pill {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.5rem;
-      padding: 0.4rem 0.85rem;
-      border-radius: 9999px;
-      font-size: 0.75rem;
-      font-weight: 700;
-      background: rgba(16, 185, 129, 0.12);
-      color: #34d399;
-      border: 1px solid rgba(16, 185, 129, 0.3);
-      box-shadow: 0 0 12px rgba(16, 185, 129, 0.2);
-    }
-    .stream-pill.disconnected {
-      background: rgba(239, 68, 68, 0.12);
-      color: #f87171;
-      border-color: rgba(239, 68, 68, 0.3);
-      box-shadow: none;
-    }
+    .badge-success { background: rgba(16, 185, 129, 0.14); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); }
+    .badge-info { background: rgba(59, 130, 246, 0.14); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.3); }
+    .badge-cyan { background: rgba(6, 182, 212, 0.14); color: #22d3ee; border: 1px solid rgba(6, 182, 212, 0.3); }
+    .badge-purple { background: rgba(139, 92, 246, 0.14); color: #c084fc; border: 1px solid rgba(139, 92, 246, 0.3); }
+    .badge-warning { background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.32); }
+    .badge-danger { background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.32); }
+    .badge-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; display: inline-block; box-shadow: 0 0 8px currentColor; }
+    .pulse-dot { animation: pulse 1.6s infinite; }
+    .pulse-dot-red { background: #ef4444 !important; box-shadow: 0 0 10px #ef4444 !important; animation: pulse 1.2s infinite !important; }
+    @keyframes pulse { 0% { transform: scale(0.95); opacity: 0.75; } 50% { transform: scale(1.3); opacity: 1; } 100% { transform: scale(0.95); opacity: 0.75; } }
+
+    /* NETWORK MODE SWITCHER & QUICK LINKS */
     .mode-switch-group {
       display: inline-flex;
-      background: #0b1324;
-      border: 1px solid #203158;
-      border-radius: 10px;
+      background: #080f1e;
+      border: 1px solid var(--border-strong);
+      border-radius: 9px;
       padding: 3px;
-      gap: 4px;
+      gap: 3px;
     }
     .mode-btn {
-      padding: 0.4rem 0.85rem;
-      border-radius: 7px;
-      font-size: 0.78rem;
+      padding: 0.35rem 0.7rem;
+      border-radius: 6px;
+      font-size: 0.73rem;
       font-weight: 700;
       cursor: pointer;
       border: none;
       background: transparent;
       color: var(--text-muted);
-      transition: all 0.2s;
+      transition: all 0.18s;
       display: inline-flex;
       align-items: center;
-      gap: 0.35rem;
+      gap: 0.3rem;
     }
     .mode-btn:hover { color: #fff; }
-    .mode-btn.active {
-      background: linear-gradient(135deg, #1d4ed8, #2563eb);
-      color: #fff;
-      box-shadow: 0 2px 8px rgba(37, 99, 235, 0.4);
-    }
-    @keyframes pulse {
-      0% { transform: scale(0.95); opacity: 0.7; }
-      50% { transform: scale(1.3); opacity: 1; }
-      100% { transform: scale(0.95); opacity: 0.7; }
-    }
+    .mode-btn.active { background: linear-gradient(135deg, #1d4ed8, #2563eb); color: #fff; box-shadow: 0 2px 8px rgba(37, 99, 235, 0.4); }
+
     .quick-links { display: flex; gap: 0.4rem; flex-wrap: wrap; }
     .quick-link-btn {
-      background: #1e293b;
+      background: #17223a;
       color: #e2e8f0;
       text-decoration: none;
-      padding: 0.35rem 0.7rem;
-      border-radius: 6px;
-      font-size: 0.75rem;
+      padding: 0.34rem 0.65rem;
+      border-radius: 7px;
+      font-size: 0.73rem;
       font-weight: 600;
       display: inline-flex;
       align-items: center;
-      gap: 0.35rem;
-      border: 1px solid #334155;
-      transition: all 0.2s;
+      gap: 0.3rem;
+      border: 1px solid #2b3c60;
+      transition: all 0.18s;
     }
-    .quick-link-btn:hover { background: #3b82f6; border-color: #60a5fa; color: #fff; transform: translateY(-1px); }
+    .quick-link-btn:hover { background: var(--primary); border-color: #60a5fa; color: #fff; transform: translateY(-1px); }
 
     /* NAV TABS */
     .nav-tabs {
       display: flex;
-      gap: 0.5rem;
-      padding: 0.65rem 1.5rem;
-      background-color: #090e1a;
+      gap: 0.45rem;
+      padding: 0.6rem 1.5rem;
+      background: rgba(8, 13, 26, 0.94);
       border-bottom: 1px solid var(--border-color);
       overflow-x: auto;
       position: sticky;
-      top: 61px;
-      z-index: 45;
+      top: 60px;
+      z-index: 50;
     }
     .nav-tab {
       background: transparent;
       border: 1px solid transparent;
       color: var(--text-muted);
-      padding: 0.5rem 1.1rem;
+      padding: 0.48rem 1rem;
       border-radius: 8px;
-      font-size: 0.85rem;
+      font-size: 0.82rem;
       font-weight: 600;
       cursor: pointer;
-      display: flex;
+      display: inline-flex;
       align-items: center;
-      gap: 0.5rem;
-      transition: all 0.2s;
+      gap: 0.45rem;
+      transition: all 0.18s;
       white-space: nowrap;
     }
-    .nav-tab:hover { color: #fff; background-color: rgba(255, 255, 255, 0.05); }
+    .nav-tab:hover { color: #fff; background: rgba(255, 255, 255, 0.05); }
     .nav-tab.active {
-      color: #ffffff;
+      color: #fff;
       background: linear-gradient(135deg, #1d4ed8, #2563eb);
       border-color: #60a5fa;
-      box-shadow: 0 0 12px rgba(37, 99, 235, 0.4);
+      box-shadow: 0 0 14px rgba(37, 99, 235, 0.35);
     }
 
     /* MAIN CONTAINER */
-    main { flex: 1; padding: 1.5rem; max-width: 1450px; width: 100%; margin: 0 auto; }
+    main { flex: 1; padding: 1.25rem 1.5rem; max-width: 1480px; width: 100%; margin: 0 auto; }
     .tab-content { display: none; }
-    .tab-content.active { display: block; animation: fadeIn 0.25s ease-in-out; }
-    @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+    .tab-content.active { display: block; animation: fadeIn 0.2s ease-out; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
 
-    /* CARDS & GRIDS */
-    .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1.25rem; margin-bottom: 1.5rem; }
-    .grid-3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1.25rem; margin-bottom: 1.5rem; }
-    .grid-4 { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
-    .grid-5 { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 0.85rem; margin-bottom: 1.25rem; }
-    
+    /* PULSE TELEMETRY STRIP */
+    .pulse-strip {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+      gap: 0.85rem;
+      margin-bottom: 1.25rem;
+    }
+    .pulse-card {
+      background: linear-gradient(180deg, rgba(20, 31, 56, 0.92), rgba(13, 21, 39, 0.96));
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius);
+      padding: 0.95rem 1.1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.25);
+    }
+    .pulse-label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); font-weight: 700; display: flex; justify-content: space-between; align-items: center; }
+    .pulse-value { font-size: 1.5rem; font-weight: 800; color: #fff; letter-spacing: -0.4px; }
+    .pulse-sub { font-size: 0.74rem; color: var(--text-muted); }
+    .meter-row { display: grid; grid-template-columns: 34px 1fr 40px; align-items: center; gap: 0.45rem; font-size: 0.72rem; color: #cbd5e1; margin-top: 2px; }
+    .meter-track { height: 6px; background: #0a1020; border-radius: 999px; overflow: hidden; border: 1px solid rgba(255,255,255,0.06); }
+    .meter-fill { height: 100%; border-radius: 999px; transition: width 0.35s ease; }
+
+    /* GRIDS & CARDS */
+    .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 1.15rem; margin-bottom: 1.25rem; }
+    .grid-3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1.15rem; margin-bottom: 1.25rem; }
+    .grid-4 { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 1.25rem; }
     .card {
       background: var(--bg-card);
       border: 1px solid var(--border-color);
       border-radius: var(--radius);
-      padding: 1.25rem;
-      box-shadow: 0 4px 15px rgba(0,0,0,0.25);
-      position: relative;
+      padding: 1.15rem;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.25);
     }
     .card-title {
-      font-size: 1rem;
+      font-size: 0.98rem;
       font-weight: 700;
       margin-bottom: 0.85rem;
       display: flex;
       align-items: center;
       justify-content: space-between;
+      gap: 0.5rem;
+      flex-wrap: wrap;
       color: #f1f5f9;
     }
-    .card-stat { font-size: 1.75rem; font-weight: 800; color: #ffffff; margin-bottom: 0.25rem; letter-spacing: -0.5px; }
-    .card-desc { font-size: 0.78rem; color: var(--text-muted); font-weight: 500; }
+    .card-stat { font-size: 1.65rem; font-weight: 800; color: #fff; margin-bottom: 0.2rem; }
+    .card-desc { font-size: 0.77rem; color: var(--text-muted); }
 
-    /* TOPOLOGY CANVAS CONTAINER */
+    /* TOPOLOGY CONTAINER */
     .topology-container {
-      background: radial-gradient(circle at center, #111d38 0%, #0a1122 70%, #060a14 100%);
+      background: radial-gradient(circle at center, #111e3b 0%, #091124 70%, #050912 100%);
       border: 1px solid #23355b;
       border-radius: var(--radius);
-      padding: 1.5rem;
+      padding: 1.25rem;
       position: relative;
-      overflow: hidden;
-      box-shadow: 0 8px 30px rgba(0,0,0,0.5);
-      margin-bottom: 1.5rem;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+      margin-bottom: 1.25rem;
     }
     .topology-header {
       display: flex;
       justify-content: space-between;
       align-items: center;
       flex-wrap: wrap;
-      gap: 1rem;
-      margin-bottom: 1rem;
+      gap: 0.85rem;
+      margin-bottom: 0.9rem;
       padding-bottom: 0.75rem;
       border-bottom: 1px solid rgba(255,255,255,0.08);
     }
     .topology-svg-wrapper {
       position: relative;
       width: 100%;
-      height: 480px;
+      height: 500px;
       border-radius: 10px;
-      background: rgba(4, 8, 18, 0.4);
+      background: rgba(4, 8, 18, 0.45);
       border: 1px solid rgba(59, 130, 246, 0.2);
       overflow: hidden;
     }
-    #topology-canvas {
-      position: absolute;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      pointer-events: none;
-      z-index: 10;
+    #topology-canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; }
+    #topology-svg { width: 100%; height: 100%; z-index: 5; }
+    .topo-node { transition: filter 0.2s ease; cursor: pointer; }
+    .topo-node:hover { filter: drop-shadow(0 0 14px rgba(96, 165, 250, 0.75)); }
+    .stream-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.45rem;
+      padding: 0.32rem 0.75rem;
+      border-radius: 9999px;
+      font-size: 0.72rem;
+      font-weight: 700;
+      background: rgba(16, 185, 129, 0.12);
+      color: #34d399;
+      border: 1px solid rgba(16, 185, 129, 0.3);
     }
-    #topology-svg {
-      width: 100%;
-      height: 100%;
-      z-index: 5;
-    }
+    .stream-pill.disconnected { background: rgba(239, 68, 68, 0.12); color: #f87171; border-color: rgba(239, 68, 68, 0.3); }
 
-    /* SIMULATION ACTION BUTTONS */
+    /* SIM BUTTONS & TERMINAL */
     .sim-controls-panel {
       display: flex;
       flex-wrap: wrap;
-      gap: 0.6rem;
+      gap: 0.5rem;
       align-items: center;
-      margin-bottom: 1.25rem;
-      padding: 0.85rem 1rem;
-      background: #0d172e;
-      border: 1px solid #203158;
+      margin: 0.85rem 0;
+      padding: 0.75rem 0.9rem;
+      background: #0b1428;
+      border: 1px solid #1e2e52;
       border-radius: 10px;
     }
     .sim-btn {
-      padding: 0.55rem 0.95rem;
+      padding: 0.48rem 0.82rem;
       border-radius: 8px;
-      font-size: 0.8rem;
+      font-size: 0.76rem;
       font-weight: 700;
       cursor: pointer;
       border: 1px solid transparent;
       display: inline-flex;
       align-items: center;
-      gap: 0.45rem;
-      transition: all 0.2s;
+      gap: 0.35rem;
+      transition: all 0.18s;
     }
-    .sim-btn:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
-    .sim-btn-cyan { background: rgba(6, 182, 212, 0.2); color: #22d3ee; border-color: rgba(6, 182, 212, 0.4); }
-    .sim-btn-cyan:hover { background: #06b6d4; color: #fff; }
-    .sim-btn-emerald { background: rgba(16, 185, 129, 0.2); color: #34d399; border-color: rgba(16, 185, 129, 0.4); }
-    .sim-btn-emerald:hover { background: #10b981; color: #fff; }
-    .sim-btn-amber { background: rgba(245, 158, 11, 0.2); color: #fbbf24; border-color: rgba(245, 158, 11, 0.4); }
-    .sim-btn-amber:hover { background: #f59e0b; color: #fff; }
-    .sim-btn-purple { background: rgba(139, 92, 246, 0.2); color: #c084fc; border-color: rgba(139, 92, 246, 0.4); }
-    .sim-btn-purple:hover { background: #8b5cf6; color: #fff; }
-    .sim-btn-rose { background: rgba(244, 63, 94, 0.2); color: #fb7185; border-color: rgba(244, 63, 94, 0.4); }
-    .sim-btn-rose:hover { background: #f43f5e; color: #fff; }
+    .sim-btn:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,0.35); }
+    .sim-btn-cyan { background: rgba(6, 182, 212, 0.16); color: #22d3ee; border-color: rgba(6, 182, 212, 0.35); }
+    .sim-btn-cyan:hover { background: #0891b2; color: #fff; }
+    .sim-btn-emerald { background: rgba(16, 185, 129, 0.16); color: #34d399; border-color: rgba(16, 185, 129, 0.35); }
+    .sim-btn-emerald:hover { background: #059669; color: #fff; }
+    .sim-btn-amber { background: rgba(245, 158, 11, 0.16); color: #fbbf24; border-color: rgba(245, 158, 11, 0.35); }
+    .sim-btn-amber:hover { background: #d97706; color: #fff; }
+    .sim-btn-purple { background: rgba(139, 92, 246, 0.16); color: #c084fc; border-color: rgba(139, 92, 246, 0.35); }
+    .sim-btn-purple:hover { background: #7c3aed; color: #fff; }
+    .sim-btn-rose { background: rgba(244, 63, 94, 0.16); color: #fb7185; border-color: rgba(244, 63, 94, 0.35); }
+    .sim-btn-rose:hover { background: #e11d48; color: #fff; }
     .sim-btn-auto { background: #1e293b; color: #f8fafc; border-color: #475569; margin-left: auto; }
-    .sim-btn-auto.active { background: #10b981; border-color: #34d399; color: #fff; box-shadow: 0 0 12px rgba(16,185,129,0.5); }
+    .sim-btn-auto.active { background: #10b981; border-color: #34d399; color: #fff; }
 
-    /* REALTIME TERMINAL LOG */
     .terminal-box {
       background: #040813;
       border: 1px solid #1c2b48;
       border-radius: 10px;
-      padding: 1rem;
+      padding: 0.85rem 1rem;
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      font-size: 0.78rem;
-      color: #94a3b8;
-      height: 220px;
+      font-size: 0.76rem;
+      color: #cbd5e1;
+      height: 195px;
       overflow-y: auto;
       display: flex;
-      flex-direction: column-reverse;
-      box-shadow: inset 0 2px 10px rgba(0,0,0,0.6);
+      flex-direction: column;
+      box-shadow: inset 0 2px 10px rgba(0,0,0,0.65);
     }
-    .terminal-row { padding: 0.25rem 0; border-bottom: 1px solid rgba(255,255,255,0.03); line-height: 1.45; word-break: break-all; }
-    .log-time { color: #64748b; margin-right: 0.5rem; }
-    .log-tag-nfc { color: #34d399; font-weight: bold; }
-    .log-tag-mqtt { color: #38bdf8; font-weight: bold; }
-    .log-tag-db { color: #fbbf24; font-weight: bold; }
-    .log-tag-api { color: #a78bfa; font-weight: bold; }
-    .log-tag-sys { color: #f43f5e; font-weight: bold; }
+    .terminal-row { padding: 0.25rem 0; border-bottom: 1px solid rgba(255,255,255,0.04); line-height: 1.45; word-break: break-word; }
+    .log-time { color: #64748b; margin-right: 0.4rem; }
+    .log-tag-esp32, .log-tag-router { color: #38bdf8; font-weight: 700; }
+    .log-tag-apps { color: #34d399; font-weight: 700; }
+    .log-tag-psm { color: #a78bfa; font-weight: 700; }
+    .log-tag-prometheus, .log-tag-mysql { color: #fbbf24; font-weight: 700; }
+    .log-tag-minio, .log-tag-mqtt { color: #22d3ee; font-weight: 700; }
+    .log-tag-grafana { color: #fb7185; font-weight: 700; }
+    .log-tag-core, .log-tag-postgres { color: #60a5fa; font-weight: 700; }
 
-    /* BUTTONS */
-    .btn { display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem; padding: 0.55rem 1.1rem; border-radius: 8px; font-size: 0.85rem; font-weight: 600; cursor: pointer; border: none; transition: all 0.2s; text-decoration: none; }
-    .btn-primary { background-color: var(--primary); color: #ffffff; }
-    .btn-primary:hover { background-color: var(--primary-hover); transform: translateY(-1px); }
-    .btn-danger { background-color: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
-    .btn-danger:hover { background-color: rgba(239, 68, 68, 0.3); }
-    .btn-sm { padding: 0.3rem 0.65rem; font-size: 0.75rem; border-radius: 6px; }
+    /* BUTTONS, TABLES, FORMS, MODALS */
+    .btn { display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem; padding: 0.5rem 1rem; border-radius: 8px; font-size: 0.82rem; font-weight: 600; cursor: pointer; border: none; transition: all 0.18s; text-decoration: none; }
+    .btn-primary { background: var(--primary); color: #fff; }
+    .btn-primary:hover { background: var(--primary-hover); }
+    .btn-secondary { background: #1e293b; color: #e2e8f0; border: 1px solid #334155; }
+    .btn-secondary:hover { background: #334155; }
+    .btn-danger { background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
+    .btn-danger:hover { background: rgba(239, 68, 68, 0.3); }
+    .btn-sm { padding: 0.3rem 0.65rem; font-size: 0.74rem; border-radius: 6px; }
 
-    /* TABLES & FORMS */
-    .table-container { overflow-x: auto; border: 1px solid var(--border-color); border-radius: var(--radius); background-color: var(--bg-card); }
-    table { width: 100%; border-collapse: collapse; text-align: left; font-size: 0.85rem; }
-    th { background-color: rgba(0,0,0,0.3); padding: 0.75rem 1rem; color: var(--text-muted); font-weight: 600; text-transform: uppercase; font-size: 0.7rem; letter-spacing: 0.5px; }
-    td { padding: 0.8rem 1rem; border-bottom: 1px solid rgba(255,255,255,0.05); }
+    .table-container { overflow-x: auto; border: 1px solid var(--border-color); border-radius: var(--radius); background: var(--bg-card-alt); }
+    table { width: 100%; border-collapse: collapse; text-align: left; font-size: 0.83rem; }
+    th { background: rgba(0,0,0,0.32); padding: 0.7rem 0.9rem; color: var(--text-muted); font-weight: 700; text-transform: uppercase; font-size: 0.68rem; letter-spacing: 0.5px; }
+    td { padding: 0.75rem 0.9rem; border-bottom: 1px solid rgba(255,255,255,0.05); vertical-align: middle; }
     tr:last-child td { border-bottom: none; }
-    tr:hover td { background-color: rgba(255,255,255,0.03); }
-    .status-list { list-style: none; display: flex; flex-direction: column; gap: 0.75rem; }
-    .status-item { display: flex; justify-content: space-between; align-items: center; padding: 0.65rem 0.85rem; background: rgba(0,0,0,0.25); border-radius: 8px; font-size: 0.85rem; border: 1px solid rgba(255,255,255,0.03); }
+    tr:hover td { background: rgba(255,255,255,0.03); }
+
+    .status-list { list-style: none; display: flex; flex-direction: column; gap: 0.55rem; }
+    .status-item { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; padding: 0.6rem 0.85rem; background: rgba(6, 10, 20, 0.55); border-radius: 8px; font-size: 0.83rem; border: 1px solid rgba(255,255,255,0.04); }
     .status-name { display: flex; align-items: center; gap: 0.5rem; font-weight: 600; }
-    .form-group { display: flex; flex-direction: column; gap: 0.35rem; margin-bottom: 1rem; }
-    .form-label { font-size: 0.8rem; font-weight: 600; color: var(--text-muted); }
-    .form-control { background-color: #0b1120; border: 1px solid var(--border-color); border-radius: 8px; padding: 0.6rem 0.75rem; color: #fff; font-size: 0.85rem; }
+
+    .filter-row { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin-bottom: 1rem; }
+    .form-group { display: flex; flex-direction: column; gap: 0.35rem; margin-bottom: 0.9rem; }
+    .form-label { font-size: 0.78rem; font-weight: 600; color: var(--text-muted); }
+    .form-control { background: #080f1f; border: 1px solid var(--border-strong); border-radius: 8px; padding: 0.55rem 0.75rem; color: #fff; font-size: 0.84rem; }
     .form-control:focus { outline: none; border-color: var(--primary); }
 
-    /* MODAL */
-    .modal-backdrop { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.75); backdrop-filter: blur(5px); z-index: 100; align-items: center; justify-content: center; }
+    .modal-backdrop { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.78); backdrop-filter: blur(5px); z-index: 100; align-items: center; justify-content: center; padding: 1rem; }
     .modal-backdrop.active { display: flex; }
-    .modal-box { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 14px; width: 90%; max-width: 600px; max-height: 85vh; overflow-y: auto; padding: 1.5rem; box-shadow: 0 25px 35px -5px rgba(0,0,0,0.7); }
-    .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.25rem; padding-bottom: 0.75rem; border-bottom: 1px solid var(--border-color); }
-    .modal-title { font-size: 1.1rem; font-weight: 700; }
-    .modal-close { background: none; border: none; color: var(--text-muted); font-size: 1.5rem; cursor: pointer; }
-    .code-preview { background-color: #080c14; border: 1px solid var(--border-color); border-radius: 8px; padding: 0.75rem; font-family: monospace; font-size: 0.75rem; color: #38bdf8; overflow-x: auto; max-height: 300px; white-space: pre-wrap; }
+    .modal-box { background: var(--bg-card); border: 1px solid var(--border-strong); border-radius: 14px; width: 100%; max-width: 640px; max-height: 86vh; overflow-y: auto; padding: 1.35rem; box-shadow: 0 25px 40px rgba(0,0,0,0.75); }
+    .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; padding-bottom: 0.7rem; border-bottom: 1px solid var(--border-color); }
+    .modal-title { font-size: 1.05rem; font-weight: 700; }
+    .modal-close { background: none; border: none; color: var(--text-muted); font-size: 1.45rem; cursor: pointer; }
+    .code-preview { background: #070b14; border: 1px solid var(--border-color); border-radius: 8px; padding: 0.75rem; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 0.75rem; color: #38bdf8; overflow-x: auto; max-height: 320px; white-space: pre-wrap; }
     .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid rgba(255,255,255,0.3); border-radius: 50%; border-top-color: #fff; animation: spin 0.8s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
-    footer { border-top: 1px solid var(--border-color); padding: 1rem 1.5rem; text-align: center; font-size: 0.75rem; color: var(--text-muted); background: #060912; }
+    footer { border-top: 1px solid var(--border-color); padding: 0.9rem 1.5rem; text-align: center; font-size: 0.74rem; color: var(--text-muted); background: #050912; }
   </style>
 </head>
 <body>
@@ -395,676 +378,509 @@
     <div class="brand">
       <div class="brand-icon">🛡️</div>
       <div>
-        <div class="brand-title">PAP Core • Mission Control</div>
-        <div class="brand-subtitle">Central API Gateway &bull; IoT Orchestrator &bull; PSM Engine</div>
+        <div class="brand-title">PAP Core • Central Homelab Engine</div>
+        <div class="brand-subtitle">API Gateway (:8000) &bull; PSM Control Plane &bull; IoT MQTT&rarr;PG &bull; S3 Disaster Recovery</div>
       </div>
     </div>
-    <div class="header-badges">
-      <span class="badge badge-success"><span class="badge-dot pulse-dot"></span> Core API :8000 Online</span>
-      <span class="badge badge-info"><span class="badge-dot"></span> Host: 192.168.25.101</span>
-      <span class="badge badge-purple"><span class="badge-dot"></span> Tailscale: 100.106.63.90</span>
-      <div class="quick-links">
-        <a href="http://192.168.25.101:3005" target="_blank" class="quick-link-btn">🖥️ PSM (:3005)</a>
-        <a href="http://192.168.25.101:8088" target="_blank" class="quick-link-btn">📟 HeatpressHub (:8088)</a>
-        <a href="http://192.168.25.101:3001" target="_blank" class="quick-link-btn">📊 Grafana (:3001)</a>
-        <a href="/docs" target="_blank" class="quick-link-btn">📖 Swagger Docs</a>
+    <div class="header-right">
+      <span class="badge badge-success" id="hdr-gateway-badge"><span class="badge-dot pulse-dot"></span> PAP Core :8000 Online</span>
+      <span class="badge badge-info" id="hdr-lan-badge">LAN: 192.168.25.105</span>
+      <span class="badge badge-purple" id="hdr-ts-badge">Tailscale: 100.78.113.53</span>
+      <div class="mode-switch-group" title="Pilih target link akses layanan">
+        <button class="mode-btn active" id="net-btn-lan" onclick="setNetworkMode('lan')">LAN</button>
+        <button class="mode-btn" id="net-btn-ts" onclick="setNetworkMode('tailscale')">Tailscale</button>
+        <button class="mode-btn" id="net-btn-domain" onclick="setNetworkMode('domain')">.homelab</button>
+      </div>
+      <div class="quick-links" id="header-quick-links">
+        <a href="http://192.168.25.105:3005" target="_blank" class="quick-link-btn" data-svc="psm-web">🎛️ PSM</a>
+        <a href="http://192.168.25.105:3000" target="_blank" class="quick-link-btn" data-svc="grafana">📊 Grafana</a>
+        <a href="http://192.168.25.105:9090" target="_blank" class="quick-link-btn" data-svc="prometheus">📈 Prom</a>
+        <a href="http://192.168.25.105:3001" target="_blank" class="quick-link-btn" data-svc="uptime-kuma">🟢 Kuma</a>
+        <a href="http://192.168.25.105:9002" target="_blank" class="quick-link-btn" data-svc="minio">☁️ MinIO</a>
+        <a href="http://192.168.25.105:8080" target="_blank" class="quick-link-btn" data-svc="nextcloud">📁 Cloud</a>
+        <a href="/docs" target="_blank" class="quick-link-btn">📖 Swagger</a>
       </div>
     </div>
   </header>
 
   <!-- NAVIGATION TABS -->
   <nav class="nav-tabs">
-    <button class="nav-tab active" onclick="switchTab('tab-topology')">📡 Diagram Arsitektur &amp; Simulasi Realtime</button>
-    <button class="nav-tab" onclick="switchTab('tab-overview')">📊 Ringkasan Sistem</button>
-    <button class="nav-tab" onclick="switchTab('tab-backups')">💾 Backup &amp; Disaster Recovery</button>
-    <button class="nav-tab" onclick="switchTab('tab-iot')">📟 IoT Heatpress Fleet &amp; NFC</button>
-    <button class="nav-tab" onclick="switchTab('tab-dns')">🌐 Local DNS &amp; Virtual Hosts</button>
-    <button class="nav-tab" onclick="switchTab('tab-containers')">🐳 Layanan &amp; Kontainer</button>
-    <button class="nav-tab" onclick="switchTab('tab-api')">🔌 Gateway API Explorer</button>
+    <button class="nav-tab active" onclick="switchTab('tab-topology')">📡 Arsitektur &amp; Live Flow</button>
+    <button class="nav-tab" onclick="switchTab('tab-overview')">📊 Kesehatan Server &amp; Core</button>
+    <button class="nav-tab" onclick="switchTab('tab-backups')">💾 Backup &amp; MinIO S3</button>
+    <button class="nav-tab" onclick="switchTab('tab-iot')">📟 IoT Fleet &amp; MQTT&rarr;PG</button>
+    <button class="nav-tab" onclick="switchTab('tab-dns')">🌐 CoreDNS &amp; Virtual Hosts</button>
+    <button class="nav-tab" onclick="switchTab('tab-containers')">🐳 Layanan &amp; Deployed Apps</button>
+    <button class="nav-tab" onclick="switchTab('tab-api')">🔌 Interactive API Explorer</button>
   </nav>
 
-  <!-- MAIN CONTENT -->
+  <!-- MAIN -->
   <main>
-
-    <!-- TAB 1: ARSITEKTUR & SIMULASI REALTIME (NEW & INTERACTIVE) -->
-    <div id="tab-topology" class="tab-content active">
-      
-      <!-- KPI STATUS ROW -->
-      <div class="grid-4" style="margin-bottom: 1.25rem;">
-        <div class="card" style="border-left: 4px solid var(--primary);">
-          <div class="card-desc">Central API Core</div>
-          <div class="card-stat" style="color: #60a5fa;">:8000</div>
-          <div class="card-desc">PAP + PSM + IoT Unified Gateway</div>
+    <!-- GLOBAL LIVE TELEMETRY PULSE STRIP -->
+    <section class="pulse-strip">
+      <div class="pulse-card" style="border-left: 4px solid var(--primary);">
+        <div class="pulse-label">
+          <span>Host Ubuntu (<span id="pulse-hostname">fa</span>)</span>
+          <button class="btn btn-secondary btn-sm" style="padding: 0.15rem 0.45rem; font-size: 0.68rem;" onclick="refreshCentralPulse(true)" id="btn-refresh-pulse">🔄 Probe</button>
         </div>
-        <div class="card" style="border-left: 4px solid var(--success);">
-          <div class="card-desc">Total Permintaan API (Realtime)</div>
-          <div class="card-stat" style="color: #34d399;" id="sim-packet-count">0</div>
-          <div class="card-desc">Paket REST, WebSocket &amp; MQTT</div>
-        </div>
-        <div class="card" style="border-left: 4px solid var(--cyan);">
-          <div class="card-desc">Latensi Rata-rata Gateway</div>
-          <div class="card-stat" style="color: #22d3ee;" id="sim-latency">1.2 ms</div>
-          <div class="card-desc">Durasi Eksekusi Server Asli</div>
-        </div>
-        <div class="card" style="border-left: 4px solid var(--purple);">
-          <div class="card-desc">Mode Aliran Trafik</div>
-          <div class="card-stat" style="color: #c084fc; font-size: 1.35rem;" id="active-mode-label">🔴 Live Stream</div>
-          <div class="card-desc">100% Real-time Server Traffic</div>
-        </div>
+        <div class="meter-row"><span>CPU</span><div class="meter-track"><div class="meter-fill" id="meter-cpu" style="width:0%; background:#3b82f6;"></div></div><span id="val-cpu">--%</span></div>
+        <div class="meter-row"><span>RAM</span><div class="meter-track"><div class="meter-fill" id="meter-ram" style="width:0%; background:#8b5cf6;"></div></div><span id="val-ram">--%</span></div>
+        <div class="meter-row"><span>Disk</span><div class="meter-track"><div class="meter-fill" id="meter-disk" style="width:0%; background:#06b6d4;"></div></div><span id="val-disk">--%</span></div>
+        <div class="pulse-sub" id="pulse-uptime">Uptime: memuat...</div>
       </div>
 
-      <!-- INTERACTIVE TOPOLOGY DIAGRAM -->
+      <div class="pulse-card" style="border-left: 4px solid var(--success);">
+        <div class="pulse-label"><span>Layanan Homelab</span><span class="badge badge-success" id="pulse-svc-badge">--/--</span></div>
+        <div class="pulse-value" id="pulse-svc-count">-- / --</div>
+        <div class="pulse-sub" id="pulse-docker-sub">Docker: -- running &bull; -- projects</div>
+      </div>
+
+      <div class="pulse-card" style="border-left: 4px solid var(--cyan);">
+        <div class="pulse-label"><span>Gateway Traffic</span><span class="badge badge-cyan" id="pulse-ws-badge">WS: 0</span></div>
+        <div class="pulse-value" id="sim-packet-count">0</div>
+        <div class="pulse-sub">Avg Latency: <b id="sim-latency" style="color:#22d3ee;">1.2 ms</b> &bull; <span id="active-mode-label">Live Stream</span></div>
+      </div>
+
+      <div class="pulse-card" style="border-left: 4px solid var(--purple);">
+        <div class="pulse-label"><span>Database &amp; S3 Vault</span><span class="badge badge-purple" id="pulse-s3-status">MinIO S3</span></div>
+        <div class="pulse-value" id="pulse-db-summary" style="font-size: 1.1rem; padding-top: 0.25rem;">PG &bull; MySQL &bull; Redis</div>
+        <div class="pulse-sub" id="pulse-backup-sub">Backup Vault: memuat...</div>
+      </div>
+    </section>
+
+    <!-- TAB 1: TOPOLOGY & LIVE FLOW -->
+    <div id="tab-topology" class="tab-content active">
       <div class="topology-container">
         <div class="topology-header">
           <div>
-            <div style="font-size: 1.15rem; font-weight: 800; color: #fff; display: flex; align-items: center; gap: 0.65rem; flex-wrap: wrap;">
-              <span>⚡ Peta Arsitektur Komunikasi API Homelab Server</span>
+            <div style="font-size: 1.1rem; font-weight: 800; color: #fff; display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;">
+              <span>⚡ Peta Arsitektur Homelab Central Engine</span>
               <span id="stream-status-pill" class="stream-pill">
                 <span class="badge-dot pulse-dot pulse-dot-red"></span>
-                <span id="stream-status-text">🔴 LIVE REALTIME API STREAM</span>
+                <span id="stream-status-text">LIVE STREAM</span>
               </span>
-              <span class="badge badge-info" style="font-size: 0.7rem;">60-120 FPS BUTTERY SMOOTH</span>
             </div>
-            <div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 0.25rem;">
-              Visualisasi real-time jalur komunikasi fisik antar Hardware ESP32, Dashboard Web, Mosquitto MQTT, dan Database (Postgres/MySQL). Setiap request nyata ke API akan memicu aliran paket data secara instan!
+            <div style="font-size: 0.76rem; color: var(--text-muted); margin-top: 0.2rem;">
+              Klik node mana saja untuk melihat status &amp; membuka layanannya. Aliran trafik nyata via WebSocket/SSE terhubung ke PAP Core (:8000).
             </div>
           </div>
-          <div style="display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap;">
-            <!-- MODE TOGGLE -->
+          <div style="display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap;">
             <div class="mode-switch-group">
-              <button class="mode-btn active" id="btn-mode-live" onclick="setLiveMode(true)">
-                <span>🔴</span> Live API Stream
-              </button>
-              <button class="mode-btn" id="btn-mode-sim" onclick="setLiveMode(false)">
-                <span>🧪</span> Uji Coba Manual
-              </button>
+              <button class="mode-btn active" id="btn-mode-live" onclick="setLiveMode(true)">🔴 Live Stream</button>
+              <button class="mode-btn" id="btn-mode-sim" onclick="setLiveMode(false)">🧪 Simulasi Flow</button>
             </div>
             <button class="sim-btn sim-btn-auto" id="btn-toggle-auto" style="display: none;" onclick="toggleAutoSimulation()">
-              <span id="auto-status-indicator">▶️ Auto Test Generator</span>
+              <span id="auto-status-indicator">▶️ Auto Flow</span>
             </button>
           </div>
         </div>
 
-        <!-- SVG TOPOLOGY GRAPH + CANVAS OVERLAY -->
         <div class="topology-svg-wrapper">
           <canvas id="topology-canvas"></canvas>
-          
           <svg id="topology-svg" viewBox="0 0 1020 500" xmlns="http://www.w3.org/2000/svg">
             <defs>
               <linearGradient id="coreGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-                <stop offset="0%" stop-color="#1e40af"/>
+                <stop offset="0%" stop-color="#1d4ed8"/>
                 <stop offset="100%" stop-color="#3b82f6"/>
               </linearGradient>
               <linearGradient id="nodeGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-                <stop offset="0%" stop-color="#1e293b"/>
-                <stop offset="100%" stop-color="#0f172a"/>
+                <stop offset="0%" stop-color="#1a2744"/>
+                <stop offset="100%" stop-color="#0d1527"/>
               </linearGradient>
-              <filter id="glowCore" x="-20%" y="-20%" width="140%" height="140%">
-                <feGaussianBlur stdDeviation="8" result="blur"/>
+              <filter id="glowCore" x="-25%" y="-25%" width="150%" height="150%">
+                <feGaussianBlur stdDeviation="9" result="blur"/>
                 <feComposite in="SourceGraphic" in2="blur" operator="over"/>
               </filter>
             </defs>
 
-            <!-- CONNECTION LINES (Dashed glow cables) -->
-            <g id="svg-paths" stroke="#253556" stroke-width="2" stroke-dasharray="6,6">
-              <!-- Router to Core & Apps -->
-              <path id="path-router-core" d="M 510,78 L 510,188" />
-              <path id="path-router-hub" d="M 420,52 Q 260,52 145,207" />
-              <path id="path-router-psm" d="M 600,52 Q 760,52 870,77" />
-              <path id="path-router-grafana" d="M 600,52 Q 780,180 850,405" />
-
-              <!-- Core to ESP32 Hardware -->
-              <path id="path-core-esp32" d="M 510,240 Q 310,130 228,110" />
-              <!-- Core to HeatpressHub Web -->
-              <path id="path-core-hub" d="M 510,240 L 228,240" />
-              <!-- Core to Stock UMKM POS -->
-              <path id="path-core-stock" d="M 510,240 Q 310,340 233,390" />
-
-              <!-- Core to PSM Control Plane -->
-              <path id="path-core-psm" d="M 510,240 Q 710,130 788,110" />
-              <!-- Core to Mosquitto MQTT -->
-              <path id="path-core-mqtt" d="M 510,240 Q 700,230 788,220" />
-              <!-- Core to InfluxDB TSDB -->
-              <path id="path-core-influx" d="M 510,240 Q 700,290 788,325" />
-              <!-- Core to Grafana -->
-              <path id="path-core-grafana" d="M 510,240 Q 690,360 768,435" />
-
-              <!-- Core to MySQL 8.4 Server -->
-              <path id="path-core-mysql" d="M 510,240 Q 430,370 370,407" />
-              <!-- Core to PostgreSQL Server -->
-              <path id="path-core-postgres" d="M 510,240 Q 590,370 650,407" />
-
-              <!-- Direct Inter-Service Pipelines -->
-              <path id="path-esp32-mqtt" d="M 145,77 Q 510,90 788,220" />
-              <path id="path-mqtt-influx" d="M 870,249 L 870,296" />
-              <path id="path-influx-grafana" d="M 870,354 L 850,405" />
-              <path id="path-mysql-grafana" d="M 443,435 Q 640,485 768,435" />
-              <path id="path-mysql-stock" d="M 298,435 Q 230,440 190,423" />
+            <!-- CONNECTION LINES -->
+            <g id="svg-paths" stroke="#243559" stroke-width="2" stroke-dasharray="6,6" fill="none">
+              <path d="M 510,78 L 510,188" />
+              <path d="M 420,52 Q 260,52 145,207" />
+              <path d="M 600,52 Q 760,52 870,77" />
+              <path d="M 600,52 Q 795,180 850,405" />
+              <path d="M 510,240 Q 310,130 228,110" />
+              <path d="M 510,240 L 228,240" />
+              <path d="M 510,240 Q 310,340 233,390" />
+              <path d="M 510,240 Q 710,130 788,110" />
+              <path d="M 510,240 Q 700,230 788,220" />
+              <path d="M 510,240 Q 700,290 788,325" />
+              <path d="M 510,240 Q 690,360 768,435" />
+              <path d="M 510,240 Q 430,370 370,407" />
+              <path d="M 510,240 Q 590,370 650,407" />
+              <path d="M 145,77 Q 510,90 788,220" />
+              <path d="M 870,249 L 870,296" />
+              <path d="M 870,354 L 850,405" />
+              <path d="M 443,435 Q 640,485 768,435" />
+              <path d="M 233,390 Q 300,435 298,435" />
             </g>
 
-            <!-- NODES -->
-
-            <!-- 0. INGRESS ROUTER & LOCAL DNS (TOP CENTER) -->
-            <g id="node-router" class="topo-node" transform="translate(510, 52)">
-              <rect x="-90" y="-26" width="180" height="52" rx="10" fill="url(#nodeGrad)" stroke="#38bdf8" stroke-width="2"/>
-              <text x="-76" y="-3" font-size="16">🚪</text>
-              <text x="-52" y="-5" fill="#38bdf8" font-size="10.5" font-weight="800">Ingress :80 &amp; DNS :53</text>
-              <text x="-52" y="8" fill="#cbd5e1" font-size="8">CoreDNS &bull; Nginx Proxy</text>
-              <text x="-52" y="19" fill="#64748b" font-size="7.5" font-family="monospace">*.homelab &bull; *.fa.local</text>
+            <!-- 0. ROUTER & DNS -->
+            <g id="node-router" class="topo-node" onclick="inspectNode('router')" transform="translate(510, 52)">
+              <rect x="-95" y="-26" width="190" height="52" rx="10" fill="url(#nodeGrad)" stroke="#38bdf8" stroke-width="2"/>
+              <circle id="dot-router" cx="80" cy="-14" r="4.5" fill="#10b981"/>
+              <text x="-80" y="-3" font-size="16">🚪</text>
+              <text x="-55" y="-5" fill="#38bdf8" font-size="10.5" font-weight="800">Ingress :80 &amp; DNS :53</text>
+              <text x="-55" y="8" fill="#cbd5e1" font-size="8">CoreDNS &bull; Nginx VHost</text>
+              <text x="-55" y="19" fill="#64748b" font-size="7.3" font-family="monospace">*.homelab &bull; *.tailscale</text>
             </g>
 
-            <!-- 1. CENTER HUB: PAP CENTRAL API GATEWAY -->
-            <g id="node-core" class="topo-node" transform="translate(510, 240)">
-              <circle r="65" fill="#1e3a8a" opacity="0.3" filter="url(#glowCore)"/>
-              <circle r="52" fill="url(#coreGrad)" stroke="#60a5fa" stroke-width="3"/>
+            <!-- 1. CORE -->
+            <g id="node-core" class="topo-node" onclick="inspectNode('core')" transform="translate(510, 240)">
+              <circle r="66" fill="#1e3a8a" opacity="0.3" filter="url(#glowCore)"/>
+              <circle r="53" fill="url(#coreGrad)" stroke="#60a5fa" stroke-width="3"/>
+              <circle id="dot-core" cx="38" cy="-35" r="5" fill="#34d399"/>
               <text y="-14" text-anchor="middle" font-size="22">🛡️</text>
               <text y="8" text-anchor="middle" fill="#ffffff" font-size="12" font-weight="800">PAP CORE API</text>
-              <text y="24" text-anchor="middle" fill="#93c5fd" font-size="9" font-family="monospace">192.168.25.101:8000</text>
-              <text y="37" text-anchor="middle" fill="#34d399" font-size="8" font-weight="700">● CENTRAL ENGINE</text>
+              <text y="23" text-anchor="middle" fill="#bfdbfe" font-size="8.5" font-family="monospace" id="svg-core-ip">192.168.25.105:8000</text>
+              <text y="36" text-anchor="middle" fill="#34d399" font-size="7.8" font-weight="700">● CENTRAL ENGINE</text>
             </g>
 
-            <!-- 2. ESP32 ETERNAL (HARDWARE) -->
-            <g id="node-esp32" class="topo-node" transform="translate(145, 110)">
-              <rect x="-82.5" y="-33" width="165" height="66" rx="10" fill="url(#nodeGrad)" stroke="#38bdf8" stroke-width="2"/>
-              <text x="-68" y="-10" font-size="18">📟</text>
-              <text x="-43" y="-10" fill="#38bdf8" font-size="11" font-weight="800">ESP32 Eternal</text>
-              <text x="-43" y="4" fill="#cbd5e1" font-size="8.5">RC522 &bull; DHT11 &bull; Buzzer</text>
-              <text x="-43" y="18" fill="#64748b" font-size="8" font-family="monospace">192.168.25.104</text>
+            <!-- 2. ESP32 -->
+            <g id="node-esp32" class="topo-node" onclick="inspectNode('esp32')" transform="translate(145, 110)">
+              <rect x="-82.5" y="-32" width="165" height="64" rx="10" fill="url(#nodeGrad)" stroke="#38bdf8" stroke-width="2"/>
+              <circle id="dot-esp32" cx="68" cy="-19" r="4.5" fill="#10b981"/>
+              <text x="-68" y="-9" font-size="17">📟</text>
+              <text x="-43" y="-9" fill="#38bdf8" font-size="10.5" font-weight="800">ESP32 IoT Fleet</text>
+              <text x="-43" y="4" fill="#cbd5e1" font-size="8">HPM 55 &bull; AF-450 &bull; NFC</text>
+              <text x="-43" y="17" fill="#64748b" font-size="7.8" font-family="monospace">MQTT + REST Telemetry</text>
             </g>
 
-            <!-- 3. HEATPRESS HUB WEB -->
-            <g id="node-hub" class="topo-node" transform="translate(145, 240)">
-              <rect x="-82.5" y="-33" width="165" height="66" rx="10" fill="url(#nodeGrad)" stroke="#34d399" stroke-width="2"/>
-              <text x="-68" y="-10" font-size="18">🖥️</text>
-              <text x="-43" y="-10" fill="#34d399" font-size="11" font-weight="800">HeatpressHub Web</text>
-              <text x="-43" y="4" fill="#cbd5e1" font-size="8.5">Fleet &amp; NFC Roles UI</text>
-              <text x="-43" y="18" fill="#64748b" font-size="8" font-family="monospace">Port :8088 / :80</text>
+            <!-- 3. APPS & NEXTCLOUD -->
+            <g id="node-apps" class="topo-node" onclick="inspectNode('apps')" transform="translate(145, 240)">
+              <rect x="-82.5" y="-32" width="165" height="64" rx="10" fill="url(#nodeGrad)" stroke="#34d399" stroke-width="2"/>
+              <circle id="dot-apps" cx="68" cy="-19" r="4.5" fill="#10b981"/>
+              <text x="-68" y="-9" font-size="17">🧩</text>
+              <text x="-43" y="-9" fill="#34d399" font-size="10.5" font-weight="800">Apps &amp; Nextcloud</text>
+              <text x="-43" y="4" fill="#cbd5e1" font-size="8">Stock UMKM &bull; Nextcloud</text>
+              <text x="-43" y="17" fill="#64748b" font-size="7.8" font-family="monospace">:8080 &bull; :3100+ Projects</text>
             </g>
 
-            <!-- 4. STOCK UMKM -->
-            <g id="node-stock" class="topo-node" transform="translate(150, 390)">
-              <rect x="-82.5" y="-33" width="165" height="66" rx="10" fill="url(#nodeGrad)" stroke="#fbbf24" stroke-width="2"/>
-              <text x="-68" y="-10" font-size="18">💼</text>
-              <text x="-43" y="-10" fill="#fbbf24" font-size="11" font-weight="800">Stock UMKM POS</text>
-              <text x="-43" y="4" fill="#cbd5e1" font-size="8.5">Kasir &amp; Inventori</text>
-              <text x="-43" y="18" fill="#64748b" font-size="8" font-family="monospace">DB: stock_umkm</text>
+            <!-- 4. MINIO S3 & REDIS -->
+            <g id="node-minio" class="topo-node" onclick="inspectNode('minio')" transform="translate(150, 390)">
+              <rect x="-82.5" y="-32" width="165" height="64" rx="10" fill="url(#nodeGrad)" stroke="#22d3ee" stroke-width="2"/>
+              <circle id="dot-minio" cx="68" cy="-19" r="4.5" fill="#10b981"/>
+              <text x="-68" y="-9" font-size="17">☁️</text>
+              <text x="-43" y="-9" fill="#22d3ee" font-size="10.5" font-weight="800">MinIO S3 &amp; Redis</text>
+              <text x="-43" y="4" fill="#cbd5e1" font-size="8">Silo S3 Vault &amp; Cache</text>
+              <text x="-43" y="17" fill="#64748b" font-size="7.8" font-family="monospace">:9000/:9002 &bull; :6379</text>
             </g>
 
             <!-- 5. PSM CONTROL PLANE -->
-            <g id="node-psm" class="topo-node" transform="translate(870, 110)">
-              <rect x="-82.5" y="-33" width="165" height="66" rx="10" fill="url(#nodeGrad)" stroke="#a78bfa" stroke-width="2"/>
-              <text x="-68" y="-10" font-size="18">🎛️</text>
-              <text x="-43" y="-10" fill="#a78bfa" font-size="11" font-weight="800">PSM Console</text>
-              <text x="-43" y="4" fill="#cbd5e1" font-size="8.5">Server &amp; Deployments</text>
-              <text x="-43" y="18" fill="#64748b" font-size="8" font-family="monospace">Port :3005</text>
+            <g id="node-psm" class="topo-node" onclick="inspectNode('psm')" transform="translate(870, 110)">
+              <rect x="-82.5" y="-32" width="165" height="64" rx="10" fill="url(#nodeGrad)" stroke="#a78bfa" stroke-width="2"/>
+              <circle id="dot-psm" cx="68" cy="-19" r="4.5" fill="#10b981"/>
+              <text x="-68" y="-9" font-size="17">🎛️</text>
+              <text x="-43" y="-9" fill="#a78bfa" font-size="10.5" font-weight="800">PSM Control Plane</text>
+              <text x="-43" y="4" fill="#cbd5e1" font-size="8">Web :3005 &bull; API :8001</text>
+              <text x="-43" y="17" fill="#64748b" font-size="7.8" font-family="monospace">psm-agent Orchestrator</text>
             </g>
 
-            <!-- 6. MOSQUITTO MQTT -->
-            <g id="node-mqtt" class="topo-node" transform="translate(870, 220)">
-              <rect x="-82.5" y="-28" width="165" height="56" rx="10" fill="url(#nodeGrad)" stroke="#60a5fa" stroke-width="2"/>
-              <text x="-68" y="-7" font-size="17">📡</text>
-              <text x="-43" y="-7" fill="#60a5fa" font-size="10.5" font-weight="800">Mosquitto MQTT</text>
-              <text x="-43" y="6" fill="#cbd5e1" font-size="8">Broker SysCtrl &amp; IoT</text>
-              <text x="-43" y="17" fill="#64748b" font-size="7.5" font-family="monospace">Port :1883</text>
+            <!-- 6. MOSQUITTO + TELEGRAF -->
+            <g id="node-mqtt" class="topo-node" onclick="inspectNode('mqtt')" transform="translate(870, 220)">
+              <rect x="-82.5" y="-28" width="165" height="56" rx="10" fill="url(#nodeGrad)" stroke="#06b6d4" stroke-width="2"/>
+              <circle id="dot-mqtt" cx="68" cy="-16" r="4.5" fill="#10b981"/>
+              <text x="-68" y="-7" font-size="16">📡</text>
+              <text x="-43" y="-7" fill="#22d3ee" font-size="10.2" font-weight="800">Mosquitto &amp; Telegraf</text>
+              <text x="-43" y="6" fill="#cbd5e1" font-size="7.8">MQTT Broker + Metrics</text>
+              <text x="-43" y="17" fill="#64748b" font-size="7.5" font-family="monospace">:1883 &bull; :9273</text>
             </g>
 
-            <!-- 7. INFLUXDB 2.7 TSDB -->
-            <g id="node-influx" class="topo-node" transform="translate(870, 325)">
-              <rect x="-82.5" y="-28" width="165" height="56" rx="10" fill="url(#nodeGrad)" stroke="#c084fc" stroke-width="2"/>
-              <text x="-68" y="-7" font-size="17">⚡</text>
-              <text x="-43" y="-7" fill="#c084fc" font-size="10.5" font-weight="800">InfluxDB 2.7 TSDB</text>
-              <text x="-43" y="6" fill="#cbd5e1" font-size="8">eternal_telemetry</text>
-              <text x="-43" y="17" fill="#64748b" font-size="7.5" font-family="monospace">Port :8086</text>
+            <!-- 7. PROMETHEUS + KUMA + CADVISOR -->
+            <g id="node-prometheus" class="topo-node" onclick="inspectNode('prometheus')" transform="translate(870, 325)">
+              <rect x="-82.5" y="-28" width="165" height="56" rx="10" fill="url(#nodeGrad)" stroke="#f59e0b" stroke-width="2"/>
+              <circle id="dot-prometheus" cx="68" cy="-16" r="4.5" fill="#10b981"/>
+              <text x="-68" y="-7" font-size="16">📈</text>
+              <text x="-43" y="-7" fill="#fbbf24" font-size="10.2" font-weight="800">Prometheus &amp; Kuma</text>
+              <text x="-43" y="6" fill="#cbd5e1" font-size="7.8">TSDB + SLA + cAdvisor</text>
+              <text x="-43" y="17" fill="#64748b" font-size="7.5" font-family="monospace">:9090 &bull; :3001 &bull; :8081</text>
             </g>
 
-            <!-- 8. GRAFANA UTAMA -->
-            <g id="node-grafana" class="topo-node" transform="translate(850, 435)">
-              <rect x="-82.5" y="-30" width="165" height="60" rx="10" fill="url(#nodeGrad)" stroke="#f43f5e" stroke-width="2"/>
-              <text x="-68" y="-9" font-size="17">📊</text>
-              <text x="-43" y="-9" fill="#f43f5e" font-size="10.5" font-weight="800">Grafana Utama</text>
-              <text x="-43" y="4" fill="#cbd5e1" font-size="8">Mixed: InfluxDB + MySQL</text>
-              <text x="-43" y="16" fill="#64748b" font-size="7.5" font-family="monospace">Port :3001</text>
+            <!-- 8. GRAFANA -->
+            <g id="node-grafana" class="topo-node" onclick="inspectNode('grafana')" transform="translate(850, 435)">
+              <rect x="-82.5" y="-28" width="165" height="56" rx="10" fill="url(#nodeGrad)" stroke="#f43f5e" stroke-width="2"/>
+              <circle id="dot-grafana" cx="68" cy="-16" r="4.5" fill="#10b981"/>
+              <text x="-68" y="-7" font-size="16">📊</text>
+              <text x="-43" y="-7" fill="#fb7185" font-size="10.2" font-weight="800">Grafana Utama</text>
+              <text x="-43" y="6" fill="#cbd5e1" font-size="7.8">PromQL + PG eternal_iot</text>
+              <text x="-43" y="17" fill="#64748b" font-size="7.5" font-family="monospace">Port :3000</text>
             </g>
 
-            <!-- 9. MYSQL 8.4 SERVER -->
-            <g id="node-mysql" class="topo-node" transform="translate(370, 435)">
+            <!-- 9. MYSQL 8.4 -->
+            <g id="node-mysql" class="topo-node" onclick="inspectNode('mysql')" transform="translate(370, 435)">
               <rect x="-72.5" y="-28" width="145" height="56" rx="8" fill="url(#nodeGrad)" stroke="#f59e0b" stroke-width="1.8"/>
+              <circle id="dot-mysql" cx="59" cy="-16" r="4" fill="#10b981"/>
               <text x="-60" y="-7" font-size="15">🐬</text>
               <text x="-37" y="-7" fill="#fbbf24" font-size="10" font-weight="800">MySQL 8.4</text>
-              <text x="-37" y="6" fill="#cbd5e1" font-size="7.5">eternal_db &bull; stock_umkm</text>
-              <text x="-37" y="17" fill="#64748b" font-size="7.5" font-family="monospace">Port :3306</text>
+              <text x="-37" y="6" fill="#cbd5e1" font-size="7.5">fadb &bull; stock_umkm</text>
+              <text x="-37" y="17" fill="#64748b" font-size="7.3" font-family="monospace">Port :3306</text>
             </g>
 
-            <!-- 10. POSTGRESQL SERVER -->
-            <g id="node-postgres" class="topo-node" transform="translate(650, 435)">
-              <rect x="-72.5" y="-28" width="145" height="56" rx="8" fill="url(#nodeGrad)" stroke="#38bdf8" stroke-width="1.8"/>
-              <text x="-60" y="-7" font-size="15">🐘</text>
-              <text x="-37" y="-7" fill="#38bdf8" font-size="10" font-weight="800">PostgreSQL</text>
-              <text x="-37" y="6" fill="#cbd5e1" font-size="7.5">pap_core &bull; psm</text>
-              <text x="-37" y="17" fill="#64748b" font-size="7.5" font-family="monospace">Port :5432</text>
+            <!-- 10. POSTGRESQL 16 -->
+            <g id="node-postgres" class="topo-node" onclick="inspectNode('postgres')" transform="translate(650, 435)">
+              <rect x="-77.5" y="-28" width="155" height="56" rx="8" fill="url(#nodeGrad)" stroke="#38bdf8" stroke-width="1.8"/>
+              <circle id="dot-postgres" cx="64" cy="-16" r="4" fill="#10b981"/>
+              <text x="-64" y="-7" font-size="15">🐘</text>
+              <text x="-40" y="-7" fill="#38bdf8" font-size="10" font-weight="800">PostgreSQL 16</text>
+              <text x="-40" y="6" fill="#cbd5e1" font-size="7.3">pap_core &bull; psm &bull; eternal_iot</text>
+              <text x="-40" y="17" fill="#64748b" font-size="7.3" font-family="monospace">Port :5432</text>
             </g>
-
           </svg>
         </div>
 
-        <!-- SIMULATION ACTION BUTTONS -->
-        <div style="margin-top: 1rem;">
-          <div style="font-size: 0.8rem; font-weight: 700; color: #cbd5e1; margin-bottom: 0.5rem;">
-            🕹️ Uji Coba Komunikasi Antar-Proyek (Klik Tombol untuk Memicu Paket Data Real-Time):
-          </div>
-          <div class="sim-controls-panel">
-            <button class="sim-btn sim-btn-emerald" onclick="simulateNfcTap()">
-              <span>🟢</span> <b>Tap Kartu NFC (ESP32)</b>
-            </button>
-            <button class="sim-btn sim-btn-cyan" onclick="simulateTelemetryPing()">
-              <span>🔵</span> <b>DHT11 Telemetri -> InfluxDB</b>
-            </button>
-            <button class="sim-btn sim-btn-purple" onclick="simulateNfcSync()">
-              <span>🟣</span> <b>Daftar User -> Sync NVS</b>
-            </button>
-            <button class="sim-btn sim-btn-emerald" style="background: rgba(6,182,212,0.15); color: #22d3ee; border: 1px solid rgba(6,182,212,0.3);" onclick="simulateDnsIngress()">
-              <span>🌐</span> <b>Ingress :80 &amp; CoreDNS :53</b>
-            </button>
-            <button class="sim-btn sim-btn-amber" onclick="simulateStockTransaction()">
-              <span>🟡</span> <b>Transaksi Stock UMKM</b>
-            </button>
-            <button class="sim-btn sim-btn-purple" onclick="simulatePsmDeploy()">
-              <span>🎛️</span> <b>Deploy Proyek PSM</b>
-            </button>
-            <button class="sim-btn sim-btn-rose" onclick="simulateBackupTrigger()">
-              <span>🔴</span> <b>Trigger Backup Snapshot</b>
-            </button>
-            <button class="sim-btn" style="background: #334155; color: #fff;" onclick="clearTerminalLogs()">
-              <span>🧹</span> Bersihkan Log
-            </button>
-          </div>
+        <!-- ACTION BUTTONS -->
+        <div class="sim-controls-panel">
+          <button class="sim-btn sim-btn-emerald" onclick="triggerSimAction('nfc_tap')">🟢 Tap NFC (ESP32&rarr;PG)</button>
+          <button class="sim-btn sim-btn-cyan" onclick="triggerSimAction('telemetry')">🔵 IoT MQTT&rarr;PG+Prom</button>
+          <button class="sim-btn sim-btn-emerald" onclick="triggerSimAction('dns_ingress')">🌐 DNS &amp; Ingress :80</button>
+          <button class="sim-btn sim-btn-amber" onclick="triggerSimAction('stock')">🟡 Stock UMKM &amp; S3</button>
+          <button class="sim-btn sim-btn-purple" onclick="triggerSimAction('psm_deploy')">🎛️ PSM Deploy Flow</button>
+          <button class="sim-btn sim-btn-cyan" onclick="triggerSimAction('minio_s3')">☁️ MinIO S3 Vault</button>
+          <button class="sim-btn sim-btn-amber" onclick="triggerSimAction('health_check')">📈 Health Scrape</button>
+          <button class="sim-btn sim-btn-rose" onclick="triggerSimAction('backup')">🔴 Backup + S3</button>
+          <button class="sim-btn" style="background: #334155; color: #fff; margin-left: auto;" onclick="clearTerminalLogs()">🧹 Clear Log</button>
         </div>
 
+        <!-- REALTIME TERMINAL LOG -->
+        <div class="terminal-box" id="terminal-stream">
+          <div class="terminal-row"><span class="log-time">[INIT]</span> <span class="log-tag-core">[PAP_CORE]</span> Menghubungkan ke live stream trafik API Homelab...</div>
+        </div>
       </div>
-
     </div>
 
-    <!-- TAB 2: OVERVIEW -->
+    <!-- TAB 2: OVERVIEW & HEALTH -->
     <div id="tab-overview" class="tab-content">
-      <div class="grid-4">
+      <div class="grid-3">
         <div class="card">
-          <div class="card-desc">Central API Core</div>
-          <div class="card-stat" style="color: #60a5fa;">:8000</div>
-          <div class="card-desc">PAP + PSM + IoT Unified</div>
+          <div class="card-title">
+            <span>🗄️ Status Database Inti</span>
+            <span class="badge badge-success">Shared Zero-Dup</span>
+          </div>
+          <ul class="status-list" id="overview-db-list">
+            <li class="status-item"><span class="status-name">Memuat status database...</span></li>
+          </ul>
         </div>
+
         <div class="card">
-          <div class="card-desc">Total Arsip Backup</div>
-          <div class="card-stat" id="stat-backup-count">0</div>
-          <div class="card-desc" id="stat-backup-size">0 MB terpakai</div>
+          <div class="card-title">
+            <span>📡 In-Process IoT &amp; Worker Engine</span>
+            <span class="badge badge-cyan" id="worker-status-badge">Memeriksa...</span>
+          </div>
+          <ul class="status-list" id="overview-iot-list">
+            <li class="status-item"><span class="status-name">Memuat status IoT pipeline...</span></li>
+          </ul>
         </div>
+
         <div class="card">
-          <div class="card-desc">Armada Heatpress IoT</div>
-          <div class="card-stat" style="color: #34d399;">3 Mesin</div>
-          <div class="card-desc">HPM 55, AF-450, APM-LOGO</div>
-        </div>
-        <div class="card">
-          <div class="card-desc">Database PostgreSQL &amp; MySQL</div>
-          <div class="card-stat" style="color: #a78bfa;">4 DB Mandiri</div>
-          <div class="card-desc">eternal_db, stock_umkm, pap_core, psm</div>
+          <div class="card-title">
+            <span>⚡ Aksi Cepat Engine</span>
+          </div>
+          <p class="card-desc" style="margin-bottom: 1rem; line-height: 1.55;">
+            <b>PAP Core (:8000)</b> bertindak sebagai pusat orkestrasi registry, autentikasi, DNS/VHost, IoT MQTT&rarr;PostgreSQL, serta Backup S3 tanpa duplikasi kontainer.
+          </p>
+          <div style="display: flex; flex-direction: column; gap: 0.6rem;">
+            <button class="btn btn-primary" onclick="refreshCentralPulse(true)">🔄 Probe Ulang Semua Layanan</button>
+            <button class="btn btn-secondary" onclick="openCreateBackupModal()">💾 Buat Backup + Replikasi S3</button>
+            <button class="btn btn-secondary" onclick="syncIotTelemetry()">📡 Sinkronkan Armada IoT</button>
+            <a href="/api/v1/dns/hosts-file" target="_blank" class="btn btn-secondary">📋 Unduh homelab_hosts.txt</a>
+            <a href="/docs" target="_blank" class="btn btn-secondary">📖 Buka Swagger OpenAPI</a>
+          </div>
         </div>
       </div>
 
       <div class="grid-2">
         <div class="card">
           <div class="card-title">
-            <span>Kondisi Layanan Homelab</span>
-            <span class="badge badge-success">Zero Duplication</span>
+            <span>🧩 Kesehatan Layanan Infrastruktur</span>
+            <span class="badge badge-info" id="overview-svc-summary">Memuat...</span>
           </div>
-          <ul class="status-list">
-            <li class="status-item">
-              <span class="status-name">🛡️ Central API Gateway (pap-api)</span>
-              <span class="badge badge-success">Port 8000 • Healthy</span>
-            </li>
-            <li class="status-item">
-              <span class="status-name">⚙️ Decoupled Background Worker (pap-worker)</span>
-              <span class="badge badge-success" id="worker-status-badge">Worker Active • Decoupled</span>
-            </li>
-            <li class="status-item">
-              <span class="status-name">⚙️ PSM Control Plane Engine</span>
-              <span class="badge badge-success">Unified in PAP</span>
-            </li>
-            <li class="status-item">
-              <span class="status-name">🖥️ PSM Web Console</span>
-              <span class="badge badge-info">Port 3005 • Active</span>
-            </li>
-            <li class="status-item">
-              <span class="status-name">📟 IoT Heatpress Telemetry &amp; Web</span>
-              <span class="badge badge-success">Port 8088 / 9273</span>
-            </li>
-            <li class="status-item">
-              <span class="status-name">🗄️ PostgreSQL 16 (pap_core, psm, eternal_iot, nextcloud)</span>
-              <span class="badge badge-success">Port 5432 • Core</span>
-            </li>
-            <li class="status-item">
-              <span class="status-name">🐬 MySQL 8.4 (fadb, stock_umkm)</span>
-              <span class="badge badge-success">Port 3306 • Shared</span>
-            </li>
-            <li class="status-item">
-              <span class="status-name">☁️ MinIO / Silo S3 Vault &amp; Redis 7</span>
-              <span class="badge badge-cyan">S3 :9000/:9002 • Redis :6379</span>
-            </li>
-            <li class="status-item">
-              <span class="status-name">📡 Mosquitto MQTT &amp; Telegraf</span>
-              <span class="badge badge-info">Port 1883 / 9273</span>
-            </li>
-            <li class="status-item">
-              <span class="status-name">📈 Prometheus &amp; Grafana Monitoring</span>
-              <span class="badge badge-info">Port 9090 / 3000</span>
-            </li>
-          </ul>
+          <ul class="status-list" id="overview-services-list"></ul>
         </div>
 
         <div class="card">
           <div class="card-title">
-            <span>Aksi Cepat &amp; Disaster Recovery</span>
+            <span>🚀 Project Registry &amp; Deployed VHosts</span>
+            <span class="badge badge-purple" id="overview-projects-badge">0 Project</span>
           </div>
-          <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 1.25rem; line-height: 1.5;">
-            Sistem Homelab kini menggunakan arsitektur <b>1 Central API Gateway (PAP Core)</b> yang menyatukan PSM Control Plane, IoT Device Mapping, dan Layanan Backup Terpadu. Tidak ada kontainer database atau broker duplikat yang membebani memori server fa.
-          </p>
-          <div style="display: flex; flex-direction: column; gap: 0.75rem;">
-            <button class="btn btn-primary" onclick="openCreateBackupModal()">💾 Buat Backup Sistem Sekarang</button>
-            <button class="btn" style="background: #334155; color: #fff;" onclick="syncIotTelemetry()">🔄 Sinkronisasi Telemetri IoT</button>
-            <a href="/docs" target="_blank" class="btn" style="background: #1e293b; color: #60a5fa; border: 1px solid var(--border-color);">📖 Buka Dokumentasi Swagger API</a>
-          </div>
+          <ul class="status-list" id="overview-projects-list"></ul>
         </div>
       </div>
     </div>
 
     <!-- TAB 3: BACKUPS -->
     <div id="tab-backups" class="tab-content">
-      <div class="card" style="margin-bottom: 1.5rem;">
+      <div class="card" style="margin-bottom: 1.25rem;">
         <div class="card-title">
-          <span>Homelab Unified Backup &amp; MinIO S3 Disaster Recovery</span>
+          <span>💾 Homelab Unified Backup &amp; MinIO S3 Disaster Recovery</span>
           <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
             <span class="badge badge-cyan" id="s3-vault-badge">☁️ S3 Vault: Checking...</span>
-            <button class="btn btn-primary" onclick="openCreateBackupModal()">➕ Buat Backup Baru</button>
+            <button class="btn btn-secondary btn-sm" onclick="pruneOldBackups()">🧹 Prune Lama</button>
+            <button class="btn btn-primary btn-sm" onclick="openCreateBackupModal()">➕ Buat Backup Baru</button>
           </div>
         </div>
-        <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 1rem; line-height: 1.55;">
-          Alur backup terpusat Homelab: <b>(1)</b> Auto-discovery PostgreSQL 16 (<code>pap_core</code>, <code>psm</code>, <code>eternal_iot</code>, <code>nextcloud</code>, DB project) &amp; MySQL 8.4 (<code>fadb</code>, <code>stock_umkm</code>) menggunakan <code>nice/ionice</code> agar server tetap ringan &rarr; <b>(2)</b> Konfigurasi CoreDNS, Nginx Ingress VHost, Prometheus, Grafana, Mosquitto, Telegraf, Docker Compose, dan <code>.env</code> teredaksi &rarr; <b>(3)</b> Koordinasi Registry PAP &amp; Workspace PSM &rarr; <b>(4)</b> Arsip <code>.tar.gz</code> ber-checksum SHA-256 + replikasi otomatis ke bucket MinIO S3 <code>s3://backups/pap/</code>.
+        <p style="font-size: 0.83rem; color: var(--text-muted); margin-bottom: 0.85rem; line-height: 1.55;">
+          Pipeline Backup: Auto-discovery PostgreSQL 16 (<code>pap_core</code>, <code>psm</code>, <code>eternal_iot</code>, <code>nextcloud</code>) &amp; MySQL 8.4 (<code>fadb</code>, <code>stock_umkm</code>) + konfigurasi CoreDNS, Nginx VHost, Prometheus, Grafana, Mosquitto, Telegraf, Compose &rarr; arsip <code>.tar.gz</code> SHA-256 + sinkronisasi ke MinIO S3 <code>s3://backups/pap/</code>.
         </p>
 
-        <div id="backup-alert" style="display: none; padding: 0.75rem; border-radius: 6px; margin-bottom: 1rem; font-size: 0.85rem;"></div>
+        <div id="backup-jobs-bar" style="display:none; padding: 0.6rem 0.85rem; border-radius: 8px; background: rgba(59,130,246,0.12); border: 1px solid rgba(59,130,246,0.3); margin-bottom: 0.85rem; font-size: 0.8rem;"></div>
+        <div id="backup-alert" style="display: none; padding: 0.75rem; border-radius: 8px; margin-bottom: 0.9rem; font-size: 0.84rem;"></div>
 
         <div class="table-container">
           <table>
             <thead>
               <tr>
-                <th>Nama File Arsip</th>
-                <th>Lingkup (Scope)</th>
+                <th>Nama Arsip</th>
+                <th>Scope</th>
                 <th>Ukuran</th>
-                <th>Waktu Dibuat</th>
-                <th>Status Database</th>
+                <th>Waktu</th>
+                <th>Database Snapshot</th>
                 <th>Aksi</th>
               </tr>
             </thead>
             <tbody id="backup-table-body">
-              <tr>
-                <td colspan="6" style="text-align: center; color: var(--text-muted); padding: 2rem;">Memuat daftar arsip backup...</td>
-              </tr>
+              <tr><td colspan="6" style="text-align: center; color: var(--text-muted); padding: 2rem;">Memuat daftar arsip backup...</td></tr>
             </tbody>
           </table>
         </div>
       </div>
     </div>
 
-    <!-- TAB 4: IOT FLEET & NFC -->
+    <!-- TAB 4: IOT FLEET -->
     <div id="tab-iot" class="tab-content">
-      <div class="card" style="margin-bottom: 1.5rem;">
+      <div class="card" style="margin-bottom: 1.25rem;">
         <div class="card-title">
-          <span>Armada Heatpress Machine IoT &amp; Eternal Smart Lock</span>
-          <div style="display: flex; gap: 0.5rem;">
-            <a href="http://192.168.25.101:8088" target="_blank" class="btn btn-sm btn-primary">📟 Buka HeatpressHub Web</a>
-            <button class="btn btn-sm" style="background: #334155; color: #fff;" onclick="syncIotTelemetry()">🔄 Sinkronkan Telemetri</button>
+          <span>📟 Armada IoT &amp; Pipeline MQTT &rarr; PostgreSQL (<code>eternal_iot</code>)</span>
+          <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+            <span class="badge badge-cyan" id="iot-consumer-pill">MQTT Consumer: checking...</span>
+            <button class="btn btn-sm btn-primary" onclick="loadIotFleet()">🔄 Muat Ulang Armada</button>
+            <button class="btn btn-sm btn-secondary" onclick="syncIotTelemetry()">📡 Sinkronkan Telemetri</button>
           </div>
         </div>
         <div class="grid-3" id="iot-cards-container">
-          <!-- Eternal ESP32 -->
-          <div class="card" style="background-color: #0b1426; border: 1px solid #1e3a8a;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
-              <span style="font-weight: 800; font-size: 1.1rem; color: #38bdf8;">Eternal ESP32</span>
-              <span class="badge badge-success">Online (Buzzer KY-012)</span>
-            </div>
-            <div style="font-family: monospace; font-size: 0.75rem; color: var(--text-muted); margin-bottom: 0.75rem;">88:57:21:8E:59:54 (192.168.25.104)</div>
-            <div style="font-size: 0.85rem; display: flex; flex-direction: column; gap: 0.35rem;">
-              <div>Fungsi: <b>NFC Toggle Lock, Solenoid Relay, DHT11</b></div>
-              <div>Database: <code>MySQL eternal_db (:3306)</code></div>
-              <div>Topik: <code>/SysCtrl, /Eternal/#</code></div>
-            </div>
-          </div>
-          <!-- HPM 55 -->
-          <div class="card" style="background-color: #0b1426; border: 1px solid #374151;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
-              <span style="font-weight: 700; font-size: 1.1rem; color: #60a5fa;">HPM 55</span>
-              <span class="badge badge-success">Online</span>
-            </div>
-            <div style="font-family: monospace; font-size: 0.75rem; color: var(--text-muted); margin-bottom: 0.75rem;">7C:87:CE:2D:B3:7C</div>
-            <div style="font-size: 0.85rem; display: flex; flex-direction: column; gap: 0.35rem;">
-              <div>Lokasi: <b>Workshop Heatpress #1</b></div>
-              <div>Topik MQTT: <code>heatpress/telemetry/7C87CE2DB37C</code></div>
-            </div>
-          </div>
-          <!-- AF-450 -->
-          <div class="card" style="background-color: #0b1426; border: 1px solid #374151;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
-              <span style="font-weight: 700; font-size: 1.1rem; color: #34d399;">AF-450</span>
-              <span class="badge badge-success">Online</span>
-            </div>
-            <div style="font-family: monospace; font-size: 0.75rem; color: var(--text-muted); margin-bottom: 0.75rem;">3C:E9:0E:85:2F:A0</div>
-            <div style="font-size: 0.85rem; display: flex; flex-direction: column; gap: 0.35rem;">
-              <div>Lokasi: <b>Lini Produksi A</b></div>
-              <div>Topik MQTT: <code>heatpress/telemetry/3CE90E852FA0</code></div>
-            </div>
-          </div>
+          <div class="card" style="background: #0b1426;"><div class="card-desc">Memuat daftar perangkat IoT dari PAP Core...</div></div>
         </div>
       </div>
     </div>
 
-    <!-- TAB 5: LOCAL DNS & VIRTUAL HOSTS -->
+    <!-- TAB 5: LOCAL DNS & VHOST -->
     <div id="tab-dns" class="tab-content">
-      <div class="grid-4" style="margin-bottom: 1.25rem;">
+      <div class="grid-4">
         <div class="card">
-          <div class="card-desc">DNS Server Lokal</div>
+          <div class="card-desc">CoreDNS Server</div>
           <div class="card-stat" style="color: #34d399;">:53</div>
-          <div class="card-desc" id="dns-status-badge">CoreDNS Active</div>
+          <div class="card-desc" id="dns-status-badge">Memeriksa...</div>
         </div>
         <div class="card">
-          <div class="card-desc">Ingress Gateway</div>
+          <div class="card-desc">Nginx Ingress</div>
           <div class="card-stat" style="color: #60a5fa;">:80</div>
-          <div class="card-desc">Virtual Host Nginx Router</div>
+          <div class="card-desc" id="router-status-badge">Virtual Host &amp; 503 Maintenance</div>
         </div>
         <div class="card">
-          <div class="card-desc">Domain Zone Utama</div>
-          <div class="card-stat" style="color: #a78bfa; font-size: 1.35rem;">*.homelab</div>
-          <div class="card-desc">dan *.fa.local</div>
+          <div class="card-desc">Zona Domain</div>
+          <div class="card-stat" style="color: #a78bfa; font-size: 1.25rem;">*.homelab</div>
+          <div class="card-desc">&amp; *.tailscale.homelab</div>
         </div>
         <div class="card">
-          <div class="card-desc">Total Domain Terdaftar</div>
-          <div class="card-stat" id="stat-dns-count" style="color: #f59e0b;">0</div>
-          <div class="card-desc">Rute Virtual Host Aktif</div>
+          <div class="card-desc">Total Rute Aktif</div>
+          <div class="card-stat" id="stat-dns-count" style="color: #fbbf24;">0</div>
+          <div class="card-desc" id="stat-dns-maint">0 dalam mode maintenance</div>
         </div>
       </div>
 
-      <div class="card" style="margin-bottom: 1.5rem;">
+      <div class="card">
         <div class="card-title">
-          <span>Daftar Domain Lokal Homelab (Tanpa Nomor Port)</span>
-          <div style="display: flex; gap: 0.5rem;">
-            <a href="/api/v1/dns/hosts-file" target="_blank" class="btn btn-sm" style="background: #334155; color: #fff;">📋 Unduh hosts.txt</a>
+          <span>Daftar Domain Lokal &amp; Virtual Hosts Homelab</span>
+          <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+            <a href="/api/v1/dns/hosts-file" target="_blank" class="btn btn-sm btn-secondary">📋 Unduh homelab_hosts.txt</a>
             <button class="btn btn-primary btn-sm" onclick="openAddDomainModal()">➕ Tambah Rute Domain</button>
           </div>
         </div>
-        <div id="dns-alert" style="display: none; padding: 0.75rem; border-radius: 6px; margin-bottom: 1rem; font-size: 0.85rem;"></div>
-
+        <div id="dns-alert" style="display: none; padding: 0.75rem; border-radius: 8px; margin-bottom: 0.9rem; font-size: 0.84rem;"></div>
         <div class="table-container">
           <table>
             <thead>
               <tr>
-                <th>Domain Lokal</th>
+                <th>Domain LAN &amp; Tailscale</th>
                 <th>Kategori</th>
-                <th>Target Kontainer / Port</th>
-                <th>Deskripsi</th>
+                <th>Upstream Target</th>
+                <th>Status</th>
                 <th>Aksi</th>
               </tr>
             </thead>
             <tbody id="dns-table-body">
-              <tr>
-                <td colspan="5" style="text-align: center; color: var(--text-muted); padding: 2rem;">Memuat daftar domain lokal...</td>
-              </tr>
+              <tr><td colspan="5" style="text-align: center; color: var(--text-muted); padding: 2rem;">Memuat daftar domain...</td></tr>
             </tbody>
           </table>
         </div>
       </div>
     </div>
 
-    <!-- TAB 6: LAYANAN & KONTAINER -->
+    <!-- TAB 6: SERVICES & CONTAINERS -->
     <div id="tab-containers" class="tab-content">
       <div class="card">
         <div class="card-title">
-          <span>Topologi Layanan Docker &amp; Server Host</span>
+          <span>🐳 Katalog Layanan Infrastruktur &amp; Aplikasi Terdeploy (Live)</span>
+          <button class="btn btn-secondary btn-sm" onclick="refreshCentralPulse(true)">🔄 Refresh Probe</button>
+        </div>
+        <div class="filter-row">
+          <input type="text" id="svc-search" class="form-control" style="max-width: 260px;" placeholder="Cari layanan atau port..." oninput="renderServicesTable()">
+          <button class="mode-btn active" id="svc-cat-all" onclick="setServiceFilter('all')">Semua</button>
+          <button class="mode-btn" id="svc-cat-core" onclick="setServiceFilter('core')">Core &amp; Ingress</button>
+          <button class="mode-btn" id="svc-cat-db" onclick="setServiceFilter('db')">Database &amp; Storage</button>
+          <button class="mode-btn" id="svc-cat-mon" onclick="setServiceFilter('mon')">Monitoring &amp; IoT</button>
+          <button class="mode-btn" id="svc-cat-proj" onclick="setServiceFilter('proj')">Deployed Projects</button>
         </div>
         <div class="table-container">
           <table>
             <thead>
               <tr>
-                <th>Nama Layanan</th>
-                <th>Port Publik</th>
-                <th>Deskripsi Fungsi</th>
-                <th>Status Tipe</th>
+                <th>Layanan / Project</th>
+                <th>Kategori</th>
+                <th>Port / Target</th>
+                <th>Akses (Sesuai Mode Jaringan)</th>
+                <th>Status Live</th>
               </tr>
             </thead>
-            <tbody>
-              <tr>
-                <td><b>homelab-dns</b></td>
-                <td><code style="color: #38bdf8;">53 (UDP/TCP)</code></td>
-                <td>CoreDNS Resolver Domain Lokal (*.homelab &amp; *.fa.local)</td>
-                <td>DNS Server</td>
-              </tr>
-              <tr>
-                <td><b>homelab-router</b></td>
-                <td><code style="color: #38bdf8;">80 (HTTP)</code></td>
-                <td>Nginx Reverse Proxy &amp; Virtual Host Router</td>
-                <td>Ingress Gateway</td>
-              </tr>
-              <tr>
-                <td><b>pap-api</b></td>
-                <td><code style="color: #34d399;">8000 (HTTP)</code></td>
-                <td>Central Core API &bull; PSM Engine &bull; Ingress &amp; Traffic Gateway</td>
-                <td>Core API Gateway</td>
-              </tr>
-              <tr>
-                <td><b>pap-worker</b></td>
-                <td><code style="color: #38bdf8;">Daemon (Isolated)</code></td>
-                <td>Decoupled Background Engine &bull; MQTT Influx Consumer &bull; Auto-Backup Scheduler &bull; IoT Fleet Watchdog</td>
-                <td><span class="badge badge-success">Background Worker (Decoupled)</span></td>
-              </tr>
-              <tr>
-                <td><b>psm-web</b></td>
-                <td><code style="color: #a78bfa;">3005</code></td>
-                <td>Personal Server Manager Web GUI</td>
-                <td>Frontend Console</td>
-              </tr>
-              <tr>
-                <td><b>iot_dashboard_web</b></td>
-                <td><code style="color: #34d399;">8088</code></td>
-                <td>Heatpress Fleet Dashboard Nginx</td>
-                <td>IoT Web Portal</td>
-              </tr>
-              <tr>
-                <td><b>iot_telegraf</b></td>
-                <td><code style="color: #f59e0b;">9273</code></td>
-                <td>MQTT to Prometheus Metrics Exporter</td>
-                <td>Telemetry Bridge</td>
-              </tr>
-              <tr>
-                <td><b>minio</b></td>
-                <td><code style="color: #22d3ee;">9000 / 9002</code></td>
-                <td>MinIO / Silo S3 Object Storage &amp; Off-Container Backup Vault (<code>backups</code>)</td>
-                <td>Object Storage</td>
-              </tr>
-              <tr>
-                <td><b>grafana</b></td>
-                <td><code style="color: #f43f5e;">3000</code></td>
-                <td>Grafana Observability Dashboards (grafana.homelab)</td>
-                <td>Visual Dashboard</td>
-              </tr>
-              <tr>
-                <td><b>prometheus</b></td>
-                <td><code style="color: #eab308;">9090</code></td>
-                <td>Prometheus TSDB Scrape Server (prometheus.homelab)</td>
-                <td>Metrics TSDB</td>
-              </tr>
+            <tbody id="services-table-body">
+              <tr><td colspan="5" style="text-align: center; color: var(--text-muted); padding: 2rem;">Memuat katalog layanan live...</td></tr>
             </tbody>
           </table>
         </div>
       </div>
     </div>
 
-    <!-- TAB 7: API DOCS -->
+    <!-- TAB 7: API EXPLORER -->
     <div id="tab-api" class="tab-content">
       <div class="card">
         <div class="card-title">
-          <span>Central API Gateway Routing Explorer</span>
-          <a href="/docs" target="_blank" class="btn btn-primary btn-sm">Buka Swagger UI</a>
+          <span>🔌 Interactive Central Gateway API Explorer</span>
+          <a href="/docs" target="_blank" class="btn btn-primary btn-sm">📖 Buka Swagger UI Lengkap</a>
         </div>
-        <div class="table-container">
+        <div class="table-container" style="margin-bottom: 1rem;">
           <table>
             <thead>
               <tr>
-                <th>Metode &amp; Path</th>
-                <th>Domain / Modul</th>
+                <th>Endpoint</th>
+                <th>Modul</th>
                 <th>Deskripsi</th>
+                <th>Uji Cepat</th>
               </tr>
             </thead>
-            <tbody>
-              <tr>
-                <td><code style="color: #34d399;">GET /</code></td>
-                <td>Management UI</td>
-                <td>Homelab Mission Control Dashboard (Halaman Ini)</td>
-              </tr>
-              <tr>
-                <td><code style="color: #34d399;">GET /health</code></td>
-                <td>System</td>
-                <td>Pemeriksaan kesehatan API Gateway utama</td>
-              </tr>
-              <tr>
-                <td><code style="color: #34d399;">GET /api/nfc/users</code></td>
-                <td>IoT Fleet</td>
-                <td>Daftar pengguna kartu NFC &amp; role whitelist</td>
-              </tr>
-              <tr>
-                <td><code style="color: #3b82f6;">POST /api/nfc/tap</code></td>
-                <td>IoT Fleet</td>
-                <td>Penerimaan event tap kartu NFC dari hardware / simulasi</td>
-              </tr>
-              <tr>
-                <td><code style="color: #34d399;">GET /api/devices/hierarchy</code></td>
-                <td>IoT Fleet</td>
-                <td>Hirarki perangkat Heatpress dan status online real-time</td>
-              </tr>
-              <tr>
-                <td><code style="color: #3b82f6;">POST /api/v1/backups/create</code></td>
-                <td>Disaster Recovery</td>
-                <td>Membuat cadangan seluruh database &amp; konfigurasi homelab</td>
-              </tr>
-              <tr>
-                <td><code style="color: #34d399;">GET /api/v1/backups</code></td>
-                <td>Disaster Recovery</td>
-                <td>Melihat daftar arsip backup yang tersedia</td>
-              </tr>
-            </tbody>
+            <tbody id="api-catalog-body"></tbody>
           </table>
+        </div>
+        <div id="api-test-output" style="display: none;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.45rem;">
+            <span style="font-size:0.82rem; font-weight:700;" id="api-test-meta">Hasil Uji</span>
+            <button class="btn btn-secondary btn-sm" onclick="document.getElementById('api-test-output').style.display='none'">Tutup</button>
+          </div>
+          <div class="code-preview" id="api-test-json"></div>
         </div>
       </div>
     </div>
-
   </main>
 
-  <!-- MODAL: BUAT BACKUP BARU -->
+  <!-- MODAL: CREATE BACKUP -->
   <div id="modal-create-backup" class="modal-backdrop">
     <div class="modal-box">
       <div class="modal-header">
@@ -1073,37 +889,37 @@
       </div>
       <form onsubmit="handleCreateBackup(event)">
         <div class="form-group">
-          <label class="form-label">Lingkup Cadangan (Backup Scope)</label>
+          <label class="form-label">Lingkup Cadangan (Scope)</label>
           <select id="backup-scope" class="form-control">
-            <option value="all">Full Homelab Stack (Database + Konfigurasi + Koordinasi PSM + S3)</option>
-            <option value="databases">Hanya Database (PostgreSQL 16 + MySQL 8.4 Terdaftar)</option>
+            <option value="all">Full Homelab Stack (Semua DB + Konfigurasi + State PSM + S3)</option>
+            <option value="databases">Hanya Database (PostgreSQL 16 + MySQL 8.4)</option>
             <option value="configs">Hanya Konfigurasi (Compose, CoreDNS, Nginx VHost, Prometheus, Grafana, MQTT)</option>
             <option value="psm">Hanya State Registry PAP &amp; Workspace PSM</option>
           </select>
         </div>
         <div class="form-group">
           <label class="form-label">Catatan / Label (Opsional)</label>
-          <input type="text" id="backup-note" class="form-control" placeholder="Contoh: Backup Sebelum Upgrade Release">
+          <input type="text" id="backup-note" class="form-control" placeholder="Contoh: Backup Sebelum Upgrade PAP Core">
         </div>
-        <div class="form-group" style="display: flex; flex-direction: column; gap: 0.5rem; font-size: 0.82rem; color: #cbd5e1;">
+        <div class="form-group" style="gap: 0.5rem; font-size: 0.82rem; color: #cbd5e1;">
           <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
             <input type="checkbox" id="backup-sync-s3" checked>
-            <span>Replikasi otomatis arsip ke MinIO S3 Bucket <code>backups</code></span>
+            <span>Replikasi otomatis ke MinIO S3 bucket <code>backups</code></span>
           </label>
           <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
             <input type="checkbox" id="backup-async-mode">
-            <span>Jalankan secara Asynchronous di Background (Non-blocking instant return)</span>
+            <span>Jalankan di background (Async 202 non-blocking)</span>
           </label>
         </div>
-        <div style="display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 1.5rem;">
-          <button type="button" class="btn" style="background: #334155; color: #fff;" onclick="closeCreateBackupModal()">Batal</button>
-          <button type="submit" id="btn-submit-backup" class="btn btn-primary">Mulai Cadangkan Sekarang</button>
+        <div style="display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 1.25rem;">
+          <button type="button" class="btn btn-secondary" onclick="closeCreateBackupModal()">Batal</button>
+          <button type="submit" id="btn-submit-backup" class="btn btn-primary">Mulai Backup</button>
         </div>
       </form>
     </div>
   </div>
 
-  <!-- MODAL: TAMBAH DOMAIN LOKAL -->
+  <!-- MODAL: ADD DOMAIN -->
   <div id="modal-add-domain" class="modal-backdrop">
     <div class="modal-box">
       <div class="modal-header">
@@ -1112,80 +928,469 @@
       </div>
       <form onsubmit="handleAddDomain(event)">
         <div class="form-group">
-          <label class="form-label">Domain Lokal (Otomatis ditambahkan .homelab jika belum ada)</label>
-          <input type="text" id="domain-name" class="form-control" placeholder="contoh: pos-kasir.homelab" required>
+          <label class="form-label">Domain Lokal (otomatis .homelab jika tanpa titik)</label>
+          <input type="text" id="domain-name" class="form-control" placeholder="contoh: archflow.homelab" required>
         </div>
         <div class="form-group">
-          <label class="form-label">Target Port Kontainer (Port Host)</label>
-          <input type="number" id="domain-port" class="form-control" placeholder="contoh: 3000" required>
+          <label class="form-label">Port Host Container</label>
+          <input type="number" id="domain-port" class="form-control" placeholder="contoh: 3100" required>
         </div>
         <div class="form-group">
           <label class="form-label">Target Host (Default: host.docker.internal)</label>
           <input type="text" id="domain-host" class="form-control" value="host.docker.internal">
         </div>
-        <div style="display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 1.5rem;">
-          <button type="button" class="btn" style="background: #334155; color: #fff;" onclick="closeAddDomainModal()">Batal</button>
+        <div class="form-group">
+          <label style="display:flex; align-items:center; gap:0.5rem; font-size:0.82rem; color:#cbd5e1; cursor:pointer;">
+            <input type="checkbox" id="domain-maint-mode" onchange="document.getElementById('domain-maint-fields').style.display = this.checked ? 'block' : 'none'">
+            <span>Aktifkan Halaman Maintenance HTTP 503</span>
+          </label>
+        </div>
+        <div id="domain-maint-fields" style="display:none; padding: 0.75rem; background:#091122; border:1px solid var(--border-color); border-radius:8px; margin-bottom:0.9rem;">
+          <div class="form-group">
+            <label class="form-label">Judul Maintenance</label>
+            <input type="text" id="domain-maint-title" class="form-control" placeholder="Sedang Dalam Pemeliharaan">
+          </div>
+          <div class="form-group" style="margin-bottom:0;">
+            <label class="form-label">Estimasi Selesai (ETA)</label>
+            <input type="text" id="domain-maint-eta" class="form-control" placeholder="15 Menit">
+          </div>
+        </div>
+        <div style="display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 1rem;">
+          <button type="button" class="btn btn-secondary" onclick="closeAddDomainModal()">Batal</button>
           <button type="submit" id="btn-submit-domain" class="btn btn-primary">Simpan &amp; Terapkan</button>
         </div>
       </form>
     </div>
   </div>
 
-  <!-- MODAL: DETAIL MANIFEST -->
+  <!-- MODAL: MANIFEST / NODE INSPECTOR -->
   <div id="modal-manifest" class="modal-backdrop">
-    <div class="modal-box" style="max-width: 700px;">
+    <div class="modal-box" style="max-width: 680px;">
       <div class="modal-header">
-        <div class="modal-title" id="manifest-modal-title">📋 Detail Manifest Arsip</div>
+        <div class="modal-title" id="manifest-modal-title">📋 Detail</div>
         <button class="modal-close" onclick="closeManifestModal()">&times;</button>
       </div>
       <div id="manifest-content" class="code-preview">Memuat...</div>
-      <div style="display: flex; justify-content: flex-end; margin-top: 1.25rem;">
-        <button class="btn btn-primary" onclick="closeManifestModal()">Tutup</button>
+      <div style="display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 1rem;">
+        <a id="manifest-open-link" href="#" target="_blank" class="btn btn-primary" style="display:none;">🔗 Buka Layanan</a>
+        <button class="btn btn-secondary" onclick="closeManifestModal()">Tutup</button>
       </div>
     </div>
   </div>
 
-  <!-- MODAL: HASIL VERIFIKASI ARSIP -->
+  <!-- MODAL: VERIFY BACKUP -->
   <div id="modal-verify" class="modal-backdrop">
-    <div class="modal-box" style="max-width: 750px;">
+    <div class="modal-box" style="max-width: 720px;">
       <div class="modal-header">
         <div class="modal-title" id="verify-modal-title">🔍 Hasil Verifikasi Integritas Backup</div>
         <button class="modal-close" onclick="closeVerifyModal()">&times;</button>
       </div>
-      <div id="verify-modal-body" style="font-size: 0.9rem;">
-        Memverifikasi arsip...
-      </div>
-      <div style="display: flex; justify-content: flex-end; margin-top: 1.25rem;">
+      <div id="verify-modal-body" style="font-size: 0.88rem;">Memverifikasi arsip...</div>
+      <div style="display: flex; justify-content: flex-end; margin-top: 1rem;">
         <button class="btn btn-primary" onclick="closeVerifyModal()">Tutup</button>
       </div>
     </div>
   </div>
 
-  <!-- FOOTER -->
   <footer>
-    Homelab Server fa &bull; Unified Core API Gateway (:8000) &bull; Zero Duplication Architecture &copy; 2026
+    Homelab Server <span id="footer-hostname">fa</span> &bull; PAP Core Central Engine (:8000) &bull; LAN &amp; Tailscale Ready &copy; 2026
   </footer>
 
   <script>
+    const STATE = {
+      pulse: null,
+      lanIp: '192.168.25.105',
+      tsIp: '100.78.113.53',
+      networkMode: 'lan',
+      svcCategory: 'all',
+    };
+
+    function escapeHtml(value) {
+      return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    function formatUptime(sec) {
+      const s = Math.max(0, Number(sec || 0));
+      const d = Math.floor(s / 86400);
+      const h = Math.floor((s % 86400) / 3600);
+      const m = Math.floor((s % 3600) / 60);
+      if (d > 0) return `${d}h ${h}j ${m}m`;
+      if (h > 0) return `${h}j ${m}m`;
+      return `${m}m`;
+    }
+
+    function detectInitialNetworkMode() {
+      const host = (window.location.hostname || '').toLowerCase();
+      if (host.endsWith('.tailscale.homelab')) return 'domain';
+      if (host.endsWith('.homelab') || host === 'homelab') return 'domain';
+      if (host.startsWith('100.')) return 'tailscale';
+      return 'lan';
+    }
+
+    function setNetworkMode(mode) {
+      STATE.networkMode = mode;
+      ['lan', 'tailscale', 'domain'].forEach(m => {
+        const id = m === 'tailscale' ? 'net-btn-ts' : `net-btn-${m}`;
+        const el = document.getElementById(id);
+        if (el) el.classList.toggle('active', m === mode);
+      });
+      updateQuickLinks();
+      renderServicesTable();
+    }
+
+    function resolveServiceHref(svc) {
+      if (!svc) return '#';
+      if (STATE.networkMode === 'domain') {
+        const host = (window.location.hostname || '').toLowerCase();
+        if (host.startsWith('100.') || host.includes('.tailscale.')) {
+          return svc.tailscale_domain || svc.domain || svc.tailscale_url || svc.url;
+        }
+        return svc.domain || svc.url;
+      }
+      if (STATE.networkMode === 'tailscale') return svc.tailscale_url || svc.url;
+      return svc.url;
+    }
+
+    function updateQuickLinks() {
+      const services = STATE.pulse?.services || [];
+      const byName = Object.fromEntries(services.map(s => [s.name, s]));
+      const fallbackPorts = {
+        'psm-web': { port: 3005, domain: 'http://psm.homelab', tsDomain: 'http://psm.tailscale.homelab' },
+        'grafana': { port: 3000, domain: 'http://grafana.homelab', tsDomain: 'http://grafana.tailscale.homelab' },
+        'prometheus': { port: 9090, domain: 'http://prometheus.homelab', tsDomain: 'http://prometheus.tailscale.homelab' },
+        'uptime-kuma': { port: 3001, domain: 'http://kuma.homelab', tsDomain: 'http://kuma.tailscale.homelab' },
+        'minio': { port: 9002, domain: 'http://minio.homelab', tsDomain: 'http://minio.tailscale.homelab' },
+        'nextcloud': { port: 8080, domain: 'http://nextcloud.homelab', tsDomain: 'http://nextcloud.tailscale.homelab' },
+      };
+      document.querySelectorAll('#header-quick-links [data-svc]').forEach(el => {
+        const name = el.getAttribute('data-svc');
+        const svc = byName[name];
+        if (svc) {
+          el.href = resolveServiceHref(svc);
+        } else if (fallbackPorts[name]) {
+          const fb = fallbackPorts[name];
+          el.href = STATE.networkMode === 'domain'
+            ? fb.domain
+            : `http://${STATE.networkMode === 'tailscale' ? STATE.tsIp : STATE.lanIp}:${fb.port}`;
+        }
+      });
+    }
+
     // ═════════════════════════════════════════════════════════════════════════
     // TAB NAVIGATION
     // ═════════════════════════════════════════════════════════════════════════
+    const TAB_IDS = ['tab-topology', 'tab-overview', 'tab-backups', 'tab-iot', 'tab-dns', 'tab-containers', 'tab-api'];
+
     function switchTab(tabId) {
       document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
       document.querySelectorAll('.nav-tab').forEach(el => el.classList.remove('active'));
       const target = document.getElementById(tabId);
       if (target) target.classList.add('active');
       const tabs = Array.from(document.querySelectorAll('.nav-tab'));
-      const tabIds = ['tab-topology', 'tab-overview', 'tab-backups', 'tab-iot', 'tab-dns', 'tab-containers', 'tab-api'];
-      const activeIdx = tabIds.indexOf(tabId);
-      if (activeIdx >= 0 && tabs[activeIdx]) tabs[activeIdx].classList.add('active');
+      const idx = TAB_IDS.indexOf(tabId);
+      if (idx >= 0 && tabs[idx]) tabs[idx].classList.add('active');
 
       if (tabId === 'tab-backups') loadBackups();
       if (tabId === 'tab-dns') loadDnsRecords();
+      if (tabId === 'tab-iot') loadIotFleet();
+      if (tabId === 'tab-containers') renderServicesTable();
     }
 
     // ═════════════════════════════════════════════════════════════════════════
-    // HIGH-PRECISION REALTIME TOPOLOGY & PARTICLE ENGINE (60-120 FPS BUTTERY SMOOTH)
+    // CENTRAL PULSE HYDRATION
+    // ═════════════════════════════════════════════════════════════════════════
+    async function refreshCentralPulse(forceRefresh = false) {
+      const btn = document.getElementById('btn-refresh-pulse');
+      if (forceRefresh && btn) {
+        btn.disabled = true;
+        btn.innerText = '...';
+      }
+      try {
+        const res = await fetch(`/api/v1/system/central-pulse${forceRefresh ? '?refresh=true' : ''}`);
+        if (!res.ok) return;
+        const json = await res.json();
+        const p = json.data;
+        if (!p) return;
+        STATE.pulse = p;
+
+        if (p.gateway?.lan_ip) STATE.lanIp = p.gateway.lan_ip;
+        if (p.gateway?.tailscale_ip) STATE.tsIp = p.gateway.tailscale_ip;
+
+        // Header badges
+        const lanBadge = document.getElementById('hdr-lan-badge');
+        if (lanBadge) lanBadge.innerText = `LAN: ${STATE.lanIp}`;
+        const tsBadge = document.getElementById('hdr-ts-badge');
+        if (tsBadge) tsBadge.innerText = `Tailscale: ${STATE.tsIp}`;
+        const svgCoreIp = document.getElementById('svg-core-ip');
+        if (svgCoreIp) svgCoreIp.textContent = `${STATE.lanIp}:8000`;
+
+        // Host metrics
+        const srv = p.server || {};
+        const hostNameEl = document.getElementById('pulse-hostname');
+        if (hostNameEl) hostNameEl.innerText = srv.hostname || 'fa';
+        const footerHost = document.getElementById('footer-hostname');
+        if (footerHost) footerHost.innerText = srv.hostname || 'fa';
+
+        setMeter('cpu', srv.cpu_usage ?? 0);
+        setMeter('ram', srv.ram_usage ?? 0);
+        setMeter('disk', srv.disk_usage ?? 0);
+        const upEl = document.getElementById('pulse-uptime');
+        if (upEl) upEl.innerText = `OS: ${srv.os || 'Linux'} • Uptime ${formatUptime(srv.uptime_seconds)}`;
+
+        // Services & Docker summary
+        const sum = p.services_summary || {};
+        const totalSvc = sum.total || 0;
+        const healthySvc = sum.healthy || 0;
+        const svcCountEl = document.getElementById('pulse-svc-count');
+        if (svcCountEl) svcCountEl.innerText = `${healthySvc} / ${totalSvc}`;
+        const svcBadge = document.getElementById('pulse-svc-badge');
+        if (svcBadge) {
+          const allOk = totalSvc > 0 && healthySvc === totalSvc;
+          svcBadge.className = allOk ? 'badge badge-success' : 'badge badge-info';
+          svcBadge.innerText = allOk ? 'All Healthy' : `${healthySvc}/${totalSvc} Active`;
+        }
+        const dock = p.docker || {};
+        const projCount = (p.projects_registry || []).length;
+        const dockSub = document.getElementById('pulse-docker-sub');
+        if (dockSub) dockSub.innerText = `Docker: ${dock.running || 0}/${dock.total || 0} running • ${projCount} projects`;
+
+        // Gateway traffic
+        const gw = p.gateway || {};
+        const pktEl = document.getElementById('sim-packet-count');
+        if (pktEl && (gw.total_requests || 0) > packetCount) {
+          packetCount = gw.total_requests;
+          pktEl.innerText = packetCount.toLocaleString();
+        }
+        const latEl = document.getElementById('sim-latency');
+        if (latEl && gw.avg_latency_ms !== undefined) latEl.innerText = `${gw.avg_latency_ms} ms`;
+        const wsEl = document.getElementById('pulse-ws-badge');
+        if (wsEl) wsEl.innerText = `WS: ${gw.ws_subscribers || 0}`;
+
+        // Databases & Backup Vault
+        const dbs = p.databases || {};
+        const dbSummary = document.getElementById('pulse-db-summary');
+        if (dbSummary) {
+          dbSummary.innerHTML =
+            `PG: <span style="color:${dbs.postgresql === 'healthy' ? '#34d399' : '#f87171'}">${escapeHtml(dbs.postgresql || 'ok')}</span> &bull; ` +
+            `MySQL: <span style="color:${dbs.mysql === 'healthy' ? '#34d399' : '#fbbf24'}">${escapeHtml(dbs.mysql || 'standby')}</span> &bull; ` +
+            `Redis: <span style="color:${dbs.redis === 'healthy' ? '#34d399' : '#fbbf24'}">${escapeHtml(dbs.redis || 'standby')}</span>`;
+        }
+        const bp = p.backup_pipeline || {};
+        const s3Badge = document.getElementById('pulse-s3-status');
+        if (s3Badge) {
+          s3Badge.className = bp.minio_s3_status === 'connected' || p.storage_vault?.reachable ? 'badge badge-success' : 'badge badge-purple';
+          s3Badge.innerText = p.storage_vault?.reachable ? 'S3 Online' : 'S3 Vault';
+        }
+        const bpSub = document.getElementById('pulse-backup-sub');
+        if (bpSub) bpSub.innerText = `${bp.archives_count || 0} arsip (${bp.local_used_human || '0 MB'}) • ${bp.minio_s3_replicated || 0} di S3`;
+
+        updateQuickLinks();
+        updateTopologyNodeDots(p);
+        renderOverviewPanels(p);
+        renderServicesTable();
+      } catch (e) {
+        console.warn('Central pulse error:', e);
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.innerText = '🔄 Probe';
+        }
+      }
+    }
+
+    function setMeter(key, pct) {
+      const clamped = Math.max(0, Math.min(100, Number(pct || 0)));
+      const fill = document.getElementById(`meter-${key}`);
+      const val = document.getElementById(`val-${key}`);
+      if (fill) {
+        fill.style.width = `${clamped}%`;
+        if (clamped > 88) fill.style.background = '#ef4444';
+        else if (clamped > 72) fill.style.background = '#f59e0b';
+      }
+      if (val) val.innerText = `${clamped.toFixed(0)}%`;
+    }
+
+    function updateTopologyNodeDots(p) {
+      const items = p.services_summary?.items || {};
+      const dbs = p.databases || {};
+      const iot = p.iot_pipeline || {};
+      const nodeHealth = {
+        core: true,
+        router: items.homelab_router === 'healthy' || items.homelab_dns === 'healthy',
+        esp32: iot.connected || iot.tracked_devices_count > 0,
+        apps: items.nextcloud === 'healthy' || (p.dns_ingress?.project_routes_count || 0) > 0,
+        minio: items.minio === 'healthy' || dbs.redis === 'healthy',
+        psm: items.psm === 'healthy' || items.psm_web === 'healthy',
+        mqtt: items.mqtt === 'healthy' || items.telegraf === 'healthy',
+        prometheus: items.prometheus === 'healthy' || items.uptime_kuma === 'healthy',
+        grafana: items.grafana === 'healthy',
+        mysql: dbs.mysql === 'healthy',
+        postgres: dbs.postgresql === 'healthy',
+      };
+      Object.entries(nodeHealth).forEach(([k, ok]) => {
+        const dot = document.getElementById(`dot-${k}`);
+        if (dot) dot.setAttribute('fill', ok ? '#10b981' : '#f59e0b');
+      });
+    }
+
+    function renderOverviewPanels(p) {
+      const dbs = p.databases || {};
+      const dbList = document.getElementById('overview-db-list');
+      if (dbList) {
+        const dbRows = [
+          { label: '🐘 PostgreSQL 16 (pap_core, psm, eternal_iot, nextcloud)', port: ':5432', st: dbs.postgresql },
+          { label: '🐬 MySQL 8.4 (fadb, stock_umkm)', port: ':3306', st: dbs.mysql },
+          { label: '⚡ Redis 7 (Session & Cache)', port: ':6379', st: dbs.redis },
+        ];
+        dbList.innerHTML = dbRows.map(r => `
+          <li class="status-item">
+            <span class="status-name">${r.label} <code>${r.port}</code></span>
+            <span class="badge ${r.st === 'healthy' ? 'badge-success' : 'badge-warning'}">${escapeHtml(r.st || 'standby')}</span>
+          </li>
+        `).join('');
+      }
+
+      const iot = p.iot_pipeline || {};
+      const iotList = document.getElementById('overview-iot-list');
+      if (iotList) {
+        iotList.innerHTML = `
+          <li class="status-item">
+            <span class="status-name">Mode Eksekusi</span>
+            <span class="badge badge-info">${escapeHtml(iot.mode || 'in_process_consumer')}</span>
+          </li>
+          <li class="status-item">
+            <span class="status-name">Broker MQTT (${escapeHtml(iot.host || 'mosquitto')}:${iot.port || 1883})</span>
+            <span class="badge ${iot.connected ? 'badge-success' : 'badge-warning'}">${iot.connected ? 'Connected' : 'Standby'}</span>
+          </li>
+          <li class="status-item">
+            <span class="status-name">Target DB: <code>${escapeHtml(iot.target_db || 'eternal_iot')}</code></span>
+            <span class="badge badge-cyan">${iot.messages_count || 0} msgs</span>
+          </li>
+          <li class="status-item">
+            <span class="status-name">Topik Terakhir</span>
+            <code>${escapeHtml(iot.last_topic || 'menunggu payload')}</code>
+          </li>
+        `;
+      }
+
+      const services = p.services || [];
+      const sum = p.services_summary || {};
+      const svcSumEl = document.getElementById('overview-svc-summary');
+      if (svcSumEl) svcSumEl.innerText = `${sum.healthy || 0} / ${sum.total || 0} Healthy`;
+      const svcList = document.getElementById('overview-services-list');
+      if (svcList) {
+        svcList.innerHTML = services.map(s => `
+          <li class="status-item">
+            <span class="status-name"><b>${escapeHtml(s.name)}</b> <span style="color:var(--text-dim); font-weight:500;">(${escapeHtml(s.category)})</span></span>
+            <span class="badge ${s.reachable ? 'badge-success' : 'badge-warning'}">:${s.port} &bull; ${escapeHtml(s.status)}</span>
+          </li>
+        `).join('');
+      }
+
+      const projects = p.projects_registry || [];
+      const projBadge = document.getElementById('overview-projects-badge');
+      if (projBadge) projBadge.innerText = `${projects.length} Terdaftar`;
+      const projList = document.getElementById('overview-projects-list');
+      if (projList) {
+        if (projects.length === 0) {
+          projList.innerHTML = '<li class="status-item"><span class="status-name">Belum ada project terdaftar</span></li>';
+        } else {
+          projList.innerHTML = projects.map(pr => {
+            const link = pr.domain ? `<a href="${escapeHtml(STATE.networkMode === 'tailscale' && pr.tailscale_url ? pr.tailscale_url : pr.url)}" target="_blank" style="color:#60a5fa; text-decoration:none; font-size:0.76rem;">🌐 ${escapeHtml(pr.domain)}</a>` : '';
+            const stBadge = pr.maintenance_mode ? 'badge-warning' : 'badge-success';
+            const stText = pr.maintenance_mode ? 'maintenance 503' : (pr.status || 'active');
+            return `
+              <li class="status-item">
+                <div>
+                  <div class="status-name">${escapeHtml(pr.name)} <code>${escapeHtml(pr.slug)}</code></div>
+                  <div style="font-size:0.74rem; color:var(--text-muted); margin-top:2px;">${escapeHtml(pr.description || '')} ${link}</div>
+                </div>
+                <span class="badge ${stBadge}">${escapeHtml(stText)}</span>
+              </li>
+            `;
+          }).join('');
+        }
+      }
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // SERVICES & DEPLOYED APPS TABLE (TAB 6)
+    // ═════════════════════════════════════════════════════════════════════════
+    function setServiceFilter(cat) {
+      STATE.svcCategory = cat;
+      ['all', 'core', 'db', 'mon', 'proj'].forEach(c => {
+        const el = document.getElementById(`svc-cat-${c}`);
+        if (el) el.classList.toggle('active', c === cat);
+      });
+      renderServicesTable();
+    }
+
+    function renderServicesTable() {
+      const tbody = document.getElementById('services-table-body');
+      if (!tbody || !STATE.pulse) return;
+      const q = (document.getElementById('svc-search')?.value || '').trim().toLowerCase();
+
+      const infraRows = (STATE.pulse.services || []).map(s => {
+        const catLower = (s.category || '').toLowerCase();
+        let group = 'core';
+        if (catLower.includes('database') || catLower.includes('cache') || catLower.includes('storage') || catLower.includes('cloud')) group = 'db';
+        else if (catLower.includes('metric') || catLower.includes('monitor') || catLower.includes('iot') || catLower.includes('observability')) group = 'mon';
+        return { ...s, group, isProject: false };
+      });
+
+      const projRows = (STATE.pulse.dns_ingress?.project_routes || []).map(r => ({
+        name: r.domain,
+        category: 'Deployed Project (Nginx VHost)',
+        port: r.target,
+        url: r.url,
+        tailscale_url: r.tailscale_url,
+        domain: r.url,
+        tailscale_domain: r.tailscale_url,
+        status: r.maintenance_mode ? 'maintenance (503)' : 'active',
+        reachable: !r.maintenance_mode,
+        group: 'proj',
+        isProject: true,
+      }));
+
+      const allRows = [...infraRows, ...projRows].filter(row => {
+        if (STATE.svcCategory !== 'all' && row.group !== STATE.svcCategory) return false;
+        if (!q) return true;
+        return `${row.name} ${row.category} ${row.port}`.toLowerCase().includes(q);
+      });
+
+      if (allRows.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; color:var(--text-muted); padding:1.5rem;">Tidak ada layanan yang cocok dengan filter.</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = allRows.map(row => {
+        const href = resolveServiceHref(row);
+        const isHttp = String(href || '').startsWith('http');
+        const linkHtml = isHttp
+          ? `<a href="${escapeHtml(href)}" target="_blank" style="color:#60a5fa; font-weight:600; text-decoration:none;">${escapeHtml(href)} ↗</a>`
+          : `<code>${escapeHtml(href)}</code>`;
+        const badgeCls = row.isProject
+          ? (row.reachable ? 'badge-success' : 'badge-warning')
+          : (row.reachable ? 'badge-success' : 'badge-warning');
+        return `
+          <tr>
+            <td><b>${escapeHtml(row.name)}</b></td>
+            <td><span class="badge badge-info">${escapeHtml(row.category)}</span></td>
+            <td><code>${escapeHtml(String(row.port))}</code></td>
+            <td>${linkHtml}</td>
+            <td><span class="badge ${badgeCls}">${escapeHtml(row.status)}</span></td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // TOPOLOGY PARTICLE ENGINE & NODE INSPECTOR
     // ═════════════════════════════════════════════════════════════════════════
     const canvas = document.getElementById('topology-canvas');
     const ctx = canvas ? canvas.getContext('2d') : null;
@@ -1193,75 +1398,87 @@
     let ripples = [];
     let autoSimInterval = null;
     let packetCount = 0;
-    let isLiveStreamActive = true;
     let trafficSocket = null;
     let sseSource = null;
     let lastFrameTime = performance.now();
 
-    // Node coordinate map matching the exact SVG viewBox (1020 x 500)
     const NODES = {
-      router:   { x: 510, y: 52,  label: "Ingress :80 & DNS :53", elId: "node-router" },
-      core:     { x: 510, y: 240, label: "Core API :8000", elId: "node-core" },
-      esp32:    { x: 145, y: 110, label: "ESP32 Eternal", elId: "node-esp32" },
-      hub:      { x: 145, y: 240, label: "HeatpressHub Web", elId: "node-hub" },
-      stock:    { x: 150, y: 390, label: "Stock UMKM POS", elId: "node-stock" },
-      psm:      { x: 870, y: 110, label: "PSM Console", elId: "node-psm" },
-      mqtt:     { x: 870, y: 220, label: "Mosquitto :1883", elId: "node-mqtt" },
-      influxdb: { x: 870, y: 325, label: "InfluxDB :8086", elId: "node-influx" },
-      grafana:  { x: 850, y: 435, label: "Grafana :3001", elId: "node-grafana" },
-      mysql:    { x: 370, y: 435, label: "MySQL :3306", elId: "node-mysql" },
-      postgres: { x: 650, y: 435, label: "PostgreSQL :5432", elId: "node-postgres" }
+      router:     { x: 510, y: 52,  elId: 'node-router',     svc: 'homelab-router', title: 'Nginx Ingress :80 & CoreDNS :53', desc: 'Mengatur routing *.homelab & *.tailscale.homelab serta halaman Maintenance 503.' },
+      core:       { x: 510, y: 240, elId: 'node-core',       svc: 'pap-api',        title: 'PAP Core Central Engine (:8000)', desc: 'Central API Gateway, Unified Backup, DNS Manager, Auth/RBAC, dan In-Process IoT MQTT->PG Consumer.' },
+      esp32:      { x: 145, y: 110, elId: 'node-esp32',      svc: null,             title: 'ESP32 Hardware & IoT Fleet', desc: 'Perangkat Heatpress & NFC (HPM 55, AF-450, APM-LOGO) mengirim data via Mosquitto MQTT & REST API.' },
+      apps:       { x: 145, y: 240, elId: 'node-apps',       svc: 'nextcloud',      title: 'Deployed Projects & Nextcloud', desc: 'Aplikasi terdeploy via PSM (Stock UMKM, ArchFlow, dll) serta Nextcloud (:8080).' },
+      minio:      { x: 150, y: 390, elId: 'node-minio',      svc: 'minio',          title: 'MinIO Silo S3 (:9000/:9002) & Redis (:6379)', desc: 'Object storage bucket (images, stock-umkm, homelab-storage, backups) & cache Redis 7.' },
+      psm:        { x: 870, y: 110, elId: 'node-psm',        svc: 'psm-web',        title: 'Personal Server Manager (:3005 / :8001)', desc: 'Control plane UI + API + psm-agent untuk Git/ZIP build, Docker management, dan rollback.' },
+      mqtt:       { x: 870, y: 220, elId: 'node-mqtt',       svc: 'mosquitto',      title: 'Mosquitto MQTT (:1883) & Telegraf (:9273)', desc: 'Broker pesan IoT & jembatan metrik MQTT menuju Prometheus.' },
+      prometheus: { x: 870, y: 325, elId: 'node-prometheus', svc: 'prometheus',     title: 'Prometheus (:9090), Kuma (:3001) & cAdvisor (:8081)', desc: 'Time-series metrics DB, monitor SLA/uptime, dan inspektor resource container.' },
+      grafana:    { x: 850, y: 435, elId: 'node-grafana',    svc: 'grafana',        title: 'Grafana Observability (:3000)', desc: 'Dashboard visualisasi server, container, dan telemetri IoT dari Prometheus & PostgreSQL.' },
+      mysql:      { x: 370, y: 435, elId: 'node-mysql',      svc: 'mysql',          title: 'MySQL 8.4 (:3306)', desc: 'Database aplikasi (fadb, stock_umkm) dengan buffer tuning & backup otomatis.' },
+      postgres:   { x: 650, y: 435, elId: 'node-postgres',   svc: 'postgresql',     title: 'PostgreSQL 16 (:5432)', desc: 'Database inti platform (pap_core, psm, eternal_iot, nextcloud).' },
     };
 
-    // Exact Quadratic Bezier Control Points matching the SVG dashed paths
     const CABLE_ROUTES = {
-      // Router & Ingress
-      "router-core":    { p0: NODES.router, cp: { x: 510, y: 146 }, p1: NODES.core },
-      "core-router":    { p0: NODES.core, cp: { x: 510, y: 146 }, p1: NODES.router },
-      "router-hub":     { p0: NODES.router, cp: { x: 260, y: 52 }, p1: NODES.hub },
-      "hub-router":     { p0: NODES.hub, cp: { x: 260, y: 52 }, p1: NODES.router },
-      "router-psm":     { p0: NODES.router, cp: { x: 740, y: 52 }, p1: NODES.psm },
-      "psm-router":     { p0: NODES.psm, cp: { x: 740, y: 52 }, p1: NODES.router },
-      "router-grafana": { p0: NODES.router, cp: { x: 780, y: 180 }, p1: NODES.grafana },
-
-      // Core to Hardware & Clients
-      "core-esp32":     { p0: NODES.core, cp: { x: 310, y: 130 }, p1: NODES.esp32 },
-      "esp32-core":     { p0: NODES.esp32, cp: { x: 310, y: 130 }, p1: NODES.core },
-      "core-hub":       { p0: NODES.core, cp: { x: 327, y: 240 }, p1: NODES.hub },
-      "hub-core":       { p0: NODES.hub, cp: { x: 327, y: 240 }, p1: NODES.core },
-      "core-stock":     { p0: NODES.core, cp: { x: 310, y: 340 }, p1: NODES.stock },
-      "stock-core":     { p0: NODES.stock, cp: { x: 310, y: 340 }, p1: NODES.core },
-      "core-psm":       { p0: NODES.core, cp: { x: 710, y: 130 }, p1: NODES.psm },
-      "psm-core":       { p0: NODES.psm, cp: { x: 710, y: 130 }, p1: NODES.core },
-
-      // Core to Pipelines
-      "core-mqtt":      { p0: NODES.core, cp: { x: 700, y: 230 }, p1: NODES.mqtt },
-      "mqtt-core":      { p0: NODES.mqtt, cp: { x: 700, y: 230 }, p1: NODES.core },
-      "core-influxdb":  { p0: NODES.core, cp: { x: 700, y: 290 }, p1: NODES.influxdb },
-      "influxdb-core":  { p0: NODES.influxdb, cp: { x: 700, y: 290 }, p1: NODES.core },
-      "core-grafana":   { p0: NODES.core, cp: { x: 690, y: 360 }, p1: NODES.grafana },
-      "grafana-core":   { p0: NODES.grafana, cp: { x: 690, y: 360 }, p1: NODES.core },
-
-      // Core to Databases
-      "core-mysql":     { p0: NODES.core, cp: { x: 430, y: 370 }, p1: NODES.mysql },
-      "mysql-core":     { p0: NODES.mysql, cp: { x: 430, y: 370 }, p1: NODES.core },
-      "core-postgres":  { p0: NODES.core, cp: { x: 590, y: 370 }, p1: NODES.postgres },
-      "postgres-core":  { p0: NODES.postgres, cp: { x: 590, y: 370 }, p1: NODES.core },
-
-      // Cross routes & Direct Pipelines
-      "esp32-mqtt":     { p0: NODES.esp32, cp: { x: 510, y: 90 }, p1: NODES.mqtt },
-      "mqtt-esp32":     { p0: NODES.mqtt, cp: { x: 510, y: 90 }, p1: NODES.esp32 },
-      "mqtt-influxdb":  { p0: NODES.mqtt, cp: { x: 870, y: 272 }, p1: NODES.influxdb },
-      "influxdb-mqtt":  { p0: NODES.influxdb, cp: { x: 870, y: 272 }, p1: NODES.mqtt },
-      "influxdb-grafana":{ p0: NODES.influxdb, cp: { x: 860, y: 380 }, p1: NODES.grafana },
-      "grafana-influxdb":{ p0: NODES.grafana, cp: { x: 860, y: 380 }, p1: NODES.influxdb },
-      "mysql-grafana":  { p0: NODES.mysql, cp: { x: 640, y: 485 }, p1: NODES.grafana },
-      "mysql-stock":    { p0: NODES.mysql, cp: { x: 260, y: 440 }, p1: NODES.stock },
-      "postgres-psm":   { p0: NODES.postgres, cp: { x: 770, y: 270 }, p1: NODES.psm }
+      'router-core':       { p0: NODES.router, cp: { x: 510, y: 146 }, p1: NODES.core },
+      'core-router':       { p0: NODES.core, cp: { x: 510, y: 146 }, p1: NODES.router },
+      'router-apps':       { p0: NODES.router, cp: { x: 260, y: 52 }, p1: NODES.apps },
+      'router-psm':        { p0: NODES.router, cp: { x: 760, y: 52 }, p1: NODES.psm },
+      'router-grafana':    { p0: NODES.router, cp: { x: 795, y: 180 }, p1: NODES.grafana },
+      'core-esp32':        { p0: NODES.core, cp: { x: 310, y: 130 }, p1: NODES.esp32 },
+      'esp32-core':        { p0: NODES.esp32, cp: { x: 310, y: 130 }, p1: NODES.core },
+      'core-apps':         { p0: NODES.core, cp: { x: 327, y: 240 }, p1: NODES.apps },
+      'apps-core':         { p0: NODES.apps, cp: { x: 327, y: 240 }, p1: NODES.core },
+      'core-minio':        { p0: NODES.core, cp: { x: 310, y: 340 }, p1: NODES.minio },
+      'minio-core':        { p0: NODES.minio, cp: { x: 310, y: 340 }, p1: NODES.core },
+      'core-psm':          { p0: NODES.core, cp: { x: 710, y: 130 }, p1: NODES.psm },
+      'psm-core':          { p0: NODES.psm, cp: { x: 710, y: 130 }, p1: NODES.core },
+      'core-mqtt':         { p0: NODES.core, cp: { x: 700, y: 230 }, p1: NODES.mqtt },
+      'mqtt-core':         { p0: NODES.mqtt, cp: { x: 700, y: 230 }, p1: NODES.core },
+      'core-prometheus':   { p0: NODES.core, cp: { x: 700, y: 290 }, p1: NODES.prometheus },
+      'prometheus-core':   { p0: NODES.prometheus, cp: { x: 700, y: 290 }, p1: NODES.core },
+      'core-grafana':      { p0: NODES.core, cp: { x: 690, y: 360 }, p1: NODES.grafana },
+      'grafana-core':      { p0: NODES.grafana, cp: { x: 690, y: 360 }, p1: NODES.core },
+      'core-mysql':        { p0: NODES.core, cp: { x: 430, y: 370 }, p1: NODES.mysql },
+      'mysql-core':        { p0: NODES.mysql, cp: { x: 430, y: 370 }, p1: NODES.core },
+      'core-postgres':     { p0: NODES.core, cp: { x: 590, y: 370 }, p1: NODES.postgres },
+      'postgres-core':     { p0: NODES.postgres, cp: { x: 590, y: 370 }, p1: NODES.core },
+      'esp32-mqtt':        { p0: NODES.esp32, cp: { x: 510, y: 90 }, p1: NODES.mqtt },
+      'mqtt-prometheus':   { p0: NODES.mqtt, cp: { x: 870, y: 272 }, p1: NODES.prometheus },
+      'prometheus-grafana':{ p0: NODES.prometheus, cp: { x: 860, y: 380 }, p1: NODES.grafana },
+      'mysql-grafana':     { p0: NODES.mysql, cp: { x: 640, y: 485 }, p1: NODES.grafana },
     };
+
+    function inspectNode(key) {
+      const node = NODES[key];
+      if (!node) return;
+      const modal = document.getElementById('modal-manifest');
+      const title = document.getElementById('manifest-modal-title');
+      const body = document.getElementById('manifest-content');
+      const openLink = document.getElementById('manifest-open-link');
+
+      const svc = (STATE.pulse?.services || []).find(s => s.name === node.svc);
+      title.innerText = `🔎 ${node.title}`;
+      const infoObj = {
+        node: key,
+        description: node.desc,
+        service_status: svc ? svc.status : 'active',
+        reachable: svc ? svc.reachable : true,
+        lan_url: svc ? svc.url : undefined,
+        tailscale_url: svc ? svc.tailscale_url : undefined,
+        domain: svc ? svc.domain : undefined,
+      };
+      body.innerText = JSON.stringify(infoObj, null, 2);
+
+      const href = svc ? resolveServiceHref(svc) : '';
+      if (href && href.startsWith('http')) {
+        openLink.href = href;
+        openLink.style.display = 'inline-flex';
+      } else {
+        openLink.style.display = 'none';
+      }
+      modal.classList.add('active');
+    }
 
     function resizeCanvas() {
-      if (!canvas) return;
+      if (!canvas || !ctx) return;
       const rect = canvas.getBoundingClientRect();
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       canvas.width = rect.width * dpr;
@@ -1272,21 +1489,21 @@
 
     function getBezierPoint(route, t) {
       const inv = 1 - t;
-      const x = inv * inv * route.p0.x + 2 * inv * t * route.cp.x + t * t * route.p1.x;
-      const y = inv * inv * route.p0.y + 2 * inv * t * route.cp.y + t * t * route.p1.y;
-      return { x, y };
+      return {
+        x: inv * inv * route.p0.x + 2 * inv * t * route.cp.x + t * t * route.p1.x,
+        y: inv * inv * route.p0.y + 2 * inv * t * route.cp.y + t * t * route.p1.y,
+      };
     }
 
     class DataParticle {
-      constructor(route, color, label, speed = 1.15, onComplete = null) {
+      constructor(route, color, label, speed = 1.2, onComplete = null) {
         this.route = route;
         this.color = color;
         this.label = label;
         this.progress = 0;
-        this.speed = speed; // progress percentage per second (1.2 = ~0.83s travel time)
+        this.speed = speed;
         this.onComplete = onComplete;
       }
-
       update(dt) {
         this.progress += this.speed * dt;
         if (this.progress >= 1) {
@@ -1299,164 +1516,118 @@
         }
         return true;
       }
-
-      draw(c, scaleX, scaleY) {
-        const curPt = getBezierPoint(this.route, this.progress);
-        const curX = curPt.x * scaleX;
-        const curY = curPt.y * scaleY;
-
-        // 1. Smooth Comet Tail along the exact curved cable line
-        const segments = 10;
-        const tailLength = 0.14;
-        for (let i = segments; i >= 1; i--) {
-          const pastT = Math.max(0, this.progress - (i / segments) * tailLength);
-          const p1 = getBezierPoint(this.route, pastT);
-          const nextT = Math.max(0, this.progress - ((i - 1) / segments) * tailLength);
-          const p2 = getBezierPoint(this.route, nextT);
-
-          const ratio = 1 - (i / segments);
+      draw(c, sx, sy) {
+        const cur = getBezierPoint(this.route, this.progress);
+        const cx = cur.x * sx;
+        const cy = cur.y * sy;
+        const segs = 8;
+        const tail = 0.13;
+        for (let i = segs; i >= 1; i--) {
+          const p1 = getBezierPoint(this.route, Math.max(0, this.progress - (i / segs) * tail));
+          const p2 = getBezierPoint(this.route, Math.max(0, this.progress - ((i - 1) / segs) * tail));
+          const ratio = 1 - (i / segs);
           c.save();
           c.strokeStyle = this.color;
-          c.globalAlpha = ratio * 0.75;
-          c.lineWidth = 1 + ratio * 4.5;
+          c.globalAlpha = ratio * 0.7;
+          c.lineWidth = 1 + ratio * 4;
           c.lineCap = 'round';
           c.beginPath();
-          c.moveTo(p1.x * scaleX, p1.y * scaleY);
-          c.lineTo(p2.x * scaleX, p2.y * scaleY);
+          c.moveTo(p1.x * sx, p1.y * sy);
+          c.lineTo(p2.x * sx, p2.y * sy);
           c.stroke();
           c.restore();
         }
-
-        // 2. Glowing Halo
         c.save();
         c.globalAlpha = 0.35;
         c.fillStyle = this.color;
         c.beginPath();
-        c.arc(curX, curY, 9, 0, Math.PI * 2);
+        c.arc(cx, cy, 8, 0, Math.PI * 2);
         c.fill();
-
-        // 3. Crisp Particle Core
-        c.globalAlpha = 1.0;
-        c.fillStyle = '#ffffff';
+        c.globalAlpha = 1;
+        c.fillStyle = '#fff';
         c.beginPath();
-        c.arc(curX, curY, 4, 0, Math.PI * 2);
+        c.arc(cx, cy, 3.8, 0, Math.PI * 2);
         c.fill();
-        c.restore();
-
-        // 4. Floating Badge (Method / Status)
         if (this.label) {
-          c.save();
-          c.font = '700 9px ui-monospace, SFMono-Regular, Menlo, Monaco, monospace';
-          const textWidth = c.measureText(this.label).width;
-          const bW = textWidth + 8;
-          const bH = 13;
-          const bX = curX - bW / 2;
-          const bY = curY - 16;
-
-          c.fillStyle = 'rgba(7, 11, 20, 0.90)';
+          c.font = '700 9px ui-monospace, Menlo, monospace';
+          const tw = c.measureText(this.label).width;
+          c.fillStyle = 'rgba(6, 10, 20, 0.9)';
           c.strokeStyle = this.color;
           c.lineWidth = 1;
           c.beginPath();
-          c.roundRect(bX, bY, bW, bH, 3);
+          c.roundRect(cx - (tw + 8) / 2, cy - 16, tw + 8, 13, 3);
           c.fill();
           c.stroke();
-
-          c.fillStyle = '#ffffff';
-          c.fillText(this.label, bX + 4, bY + 10);
-          c.restore();
+          c.fillStyle = '#fff';
+          c.fillText(this.label, cx - tw / 2, cy - 6);
         }
+        c.restore();
       }
     }
 
     class Ripple {
-      constructor(pt, color) {
-        this.pt = pt;
-        this.color = color;
-        this.elapsed = 0;
-        this.duration = 0.45;
-      }
-      update(dt) {
-        this.elapsed += dt;
-        return this.elapsed < this.duration;
-      }
-      draw(c, scaleX, scaleY) {
+      constructor(pt, color) { this.pt = pt; this.color = color; this.elapsed = 0; this.duration = 0.45; }
+      update(dt) { this.elapsed += dt; return this.elapsed < this.duration; }
+      draw(c, sx, sy) {
         const t = this.elapsed / this.duration;
-        const r = 8 + (34 - 8) * t;
         c.save();
         c.strokeStyle = this.color;
-        c.globalAlpha = (1 - t) * 0.85;
-        c.lineWidth = 2.5 * (1 - t);
+        c.globalAlpha = (1 - t) * 0.8;
+        c.lineWidth = 2.2 * (1 - t);
         c.beginPath();
-        c.arc(this.pt.x * scaleX, this.pt.y * scaleY, r, 0, Math.PI * 2);
+        c.arc(this.pt.x * sx, this.pt.y * sy, 8 + 24 * t, 0, Math.PI * 2);
         c.stroke();
         c.restore();
       }
     }
 
-    function triggerNodePulse(nodeKey, color) {
-      const node = NODES[nodeKey];
-      if (!node || !node.elId) return;
-      const el = document.getElementById(node.elId);
+    function triggerNodePulse(key, color) {
+      const n = NODES[key];
+      const el = n ? document.getElementById(n.elId) : null;
       if (!el) return;
-      el.style.filter = `drop-shadow(0 0 22px ${color}) brightness(1.4)`;
-      setTimeout(() => {
-        el.style.filter = '';
-      }, 260);
+      el.style.filter = `drop-shadow(0 0 18px ${color}) brightness(1.3)`;
+      setTimeout(() => { el.style.filter = ''; }, 240);
     }
 
-    function animateParticles(currentTime) {
-      if (!ctx || !canvas) return;
-      const dt = Math.min((currentTime - lastFrameTime) / 1000, 0.1);
-      lastFrameTime = currentTime;
-
-      const rect = canvas.getBoundingClientRect();
-      const scaleX = rect.width / 1020;
-      const scaleY = rect.height / 500;
-
-      ctx.clearRect(0, 0, rect.width, rect.height);
-
-      // 1. Draw shockwave ripples
-      ripples = ripples.filter(r => {
-        const alive = r.update(dt);
-        if (alive) r.draw(ctx, scaleX, scaleY);
-        return alive;
-      });
-
-      // 2. Draw smooth particles
-      particles = particles.filter(p => {
-        const alive = p.update(dt);
-        p.draw(ctx, scaleX, scaleY);
-        return alive;
-      });
-
+    function animateParticles(now) {
+      if (ctx && canvas) {
+        const dt = Math.min((now - lastFrameTime) / 1000, 0.1);
+        lastFrameTime = now;
+        const rect = canvas.getBoundingClientRect();
+        const sx = rect.width / 1020;
+        const sy = rect.height / 500;
+        ctx.clearRect(0, 0, rect.width, rect.height);
+        ripples = ripples.filter(r => { const ok = r.update(dt); if (ok) r.draw(ctx, sx, sy); return ok; });
+        particles = particles.filter(p => { const ok = p.update(dt); p.draw(ctx, sx, sy); return ok; });
+      }
       requestAnimationFrame(animateParticles);
     }
 
-    function spawnPacket(fromKey, toKey, color, label, speed = 1.15, onArrive = null) {
+    function normalizeNodeKey(k) {
+      if (k === 'hub' || k === 'stock') return 'apps';
+      if (k === 'influxdb') return 'postgres';
+      return NODES[k] ? k : 'core';
+    }
+
+    function spawnPacket(fromRaw, toRaw, color, label, speed = 1.2, onArrive = null) {
+      const fromKey = normalizeNodeKey(fromRaw);
+      const toKey = normalizeNodeKey(toRaw);
       const routeKey = `${fromKey}-${toKey}`;
       let route = CABLE_ROUTES[routeKey];
       if (!route) {
         if (fromKey !== 'core' && toKey !== 'core') {
-          spawnPacket(fromKey, 'core', color, label, speed, () => {
-            spawnPacket('core', toKey, color, label, speed, onArrive);
-          });
+          spawnPacket(fromKey, 'core', color, label, speed, () => spawnPacket('core', toKey, color, label, speed, onArrive));
           return;
         }
-        const fromNode = NODES[fromKey] || NODES.core;
-        const toNode = NODES[toKey] || NODES.core;
-        route = {
-          p0: fromNode,
-          cp: { x: (fromNode.x + toNode.x) / 2, y: (fromNode.y + toNode.y) / 2 },
-          p1: toNode
-        };
+        const f = NODES[fromKey];
+        const t = NODES[toKey];
+        route = { p0: f, cp: { x: (f.x + t.x) / 2, y: (f.y + t.y) / 2 }, p1: t };
       }
-
-      const p = new DataParticle(route, color, label, speed, () => {
+      particles.push(new DataParticle(route, color, label, speed, () => {
         ripples.push(new Ripple(route.p1, color));
         triggerNodePulse(toKey, color);
         if (onArrive) onArrive();
-      });
-      particles.push(p);
+      }));
     }
 
     function logTerminal(tagClass, tagText, message) {
@@ -1466,95 +1637,66 @@
       const timeStr = now.toTimeString().split(' ')[0] + '.' + String(now.getMilliseconds()).padStart(3, '0');
       const row = document.createElement('div');
       row.className = 'terminal-row';
-      row.innerHTML = `<span class="log-time">[${timeStr}]</span> <span class="${tagClass}">[${tagText}]</span> ${message}`;
+      row.innerHTML = `<span class="log-time">[${timeStr}]</span> <span class="${escapeHtml(tagClass)}">[${escapeHtml(tagText)}]</span> ${escapeHtml(message)}`;
       stream.prepend(row);
-
-      // Keep maximum 80 rows
-      if (stream.children.length > 80) {
-        stream.removeChild(stream.lastChild);
-      }
+      while (stream.children.length > 80) stream.removeChild(stream.lastChild);
     }
 
     function clearTerminalLogs() {
       const stream = document.getElementById('terminal-stream');
-      if (stream) stream.innerHTML = '<div class="terminal-row"><span class="log-time">[CLEARED]</span> Log dibersihkan. Menunggu lalu lintas data baru...</div>';
+      if (stream) stream.innerHTML = '<div class="terminal-row"><span class="log-time">[CLEARED]</span> Menunggu trafik API baru...</div>';
     }
 
     // ═════════════════════════════════════════════════════════════════════════
-    // REALTIME LIVE STREAM (WEBSOCKET + SSE FALLBACK)
+    // WEBSOCKET & SSE STREAM
     // ═════════════════════════════════════════════════════════════════════════
-
     function updateStreamBadge(connected, text) {
       const pill = document.getElementById('stream-status-pill');
-      const textEl = document.getElementById('stream-status-text');
-      if (!pill || !textEl) return;
-      if (connected) {
-        pill.className = 'stream-pill';
-        textEl.innerText = text || '🔴 LIVE REALTIME API STREAM';
-      } else {
-        pill.className = 'stream-pill disconnected';
-        textEl.innerText = text || '⚠️ STREAM OFFLINE';
-      }
+      const txt = document.getElementById('stream-status-text');
+      if (!pill || !txt) return;
+      pill.className = connected ? 'stream-pill' : 'stream-pill disconnected';
+      txt.innerText = text || (connected ? 'LIVE STREAM' : 'STREAM OFFLINE');
     }
 
     function setLiveMode(live) {
-      isLiveStreamActive = live;
       const btnLive = document.getElementById('btn-mode-live');
       const btnSim = document.getElementById('btn-mode-sim');
       const btnAuto = document.getElementById('btn-toggle-auto');
       const label = document.getElementById('active-mode-label');
-
       if (live) {
-        btnLive.classList.add('active');
-        btnSim.classList.remove('active');
+        btnLive?.classList.add('active');
+        btnSim?.classList.remove('active');
         if (btnAuto) btnAuto.style.display = 'none';
-        if (label) label.innerText = '🔴 Live Stream';
+        if (label) label.innerText = 'Live Stream';
         stopAutoSimulation();
         connectRealtimeTraffic();
       } else {
-        btnLive.classList.remove('active');
-        btnSim.classList.add('active');
+        btnLive?.classList.remove('active');
+        btnSim?.classList.add('active');
         if (btnAuto) btnAuto.style.display = 'inline-flex';
-        if (label) label.innerText = '🧪 Uji Manual';
+        if (label) label.innerText = 'Simulasi Flow';
       }
     }
 
     function connectRealtimeTraffic() {
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.host}/api/v1/traffic/ws`;
-
+      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${proto}//${window.location.host}/api/v1/traffic/ws`;
       try {
-        if (trafficSocket) {
-          trafficSocket.close();
-          trafficSocket = null;
-        }
+        if (trafficSocket) { trafficSocket.close(); trafficSocket = null; }
         trafficSocket = new WebSocket(wsUrl);
-
-        trafficSocket.onopen = () => {
-          updateStreamBadge(true, '🔴 LIVE REALTIME API (WS)');
-          console.log('[TrafficWS] Connected to live API traffic stream');
-        };
-
-        trafficSocket.onmessage = (event) => {
+        trafficSocket.onopen = () => updateStreamBadge(true, '🔴 LIVE API STREAM (WS)');
+        trafficSocket.onmessage = (ev) => {
           try {
-            const data = JSON.parse(event.data);
-            if (data.type === 'api_traffic') {
-              handleIncomingRealtimeTraffic(data);
-            }
+            const data = JSON.parse(ev.data);
+            if (data.type === 'api_traffic') handleIncomingRealtimeTraffic(data);
           } catch (e) {}
         };
-
         trafficSocket.onclose = () => {
-          updateStreamBadge(false, '🟡 RECONNECTING STREAM...');
+          updateStreamBadge(false, '🟡 RECONNECTING...');
           setTimeout(connectSseFallback, 2500);
         };
-
-        trafficSocket.onerror = () => {
-          if (trafficSocket) trafficSocket.close();
-        };
-      } catch (err) {
-        connectSseFallback();
-      }
+        trafficSocket.onerror = () => { if (trafficSocket) trafficSocket.close(); };
+      } catch (e) { connectSseFallback(); }
     }
 
     function connectSseFallback() {
@@ -1562,54 +1704,33 @@
       try {
         if (sseSource) sseSource.close();
         sseSource = new EventSource('/api/v1/traffic/stream');
-
-        sseSource.onopen = () => {
-          updateStreamBadge(true, '🔴 LIVE REALTIME API (SSE)');
+        sseSource.onopen = () => updateStreamBadge(true, '🔴 LIVE API STREAM (SSE)');
+        sseSource.onmessage = (ev) => {
+          try { handleIncomingRealtimeTraffic(JSON.parse(ev.data)); } catch (e) {}
         };
-
-        sseSource.onmessage = (event) => {
-          try {
-            const data = JSON.parse(event.data);
-            handleIncomingRealtimeTraffic(data);
-          } catch (e) {}
-        };
-
-        sseSource.onerror = () => {
-          updateStreamBadge(false, '⚠️ RETRYING STREAM...');
-        };
+        sseSource.onerror = () => updateStreamBadge(false, '⚠️ STREAM RETRY');
       } catch (e) {}
     }
 
     function handleIncomingRealtimeTraffic(data) {
-      // Update real KPI counters
       packetCount = data.total_requests || (packetCount + 1);
       const countEl = document.getElementById('sim-packet-count');
       if (countEl) countEl.innerText = packetCount.toLocaleString();
+      const lat = data.duration_ms || data.avg_latency_ms;
+      const latEl = document.getElementById('sim-latency');
+      if (lat && latEl) latEl.innerText = `${lat} ms`;
 
-      if (data.duration_ms || data.avg_latency_ms) {
-        const lat = data.duration_ms || data.avg_latency_ms;
-        const latEl = document.getElementById('sim-latency');
-        if (latEl) latEl.innerText = `${lat} ms`;
-      }
+      const src = normalizeNodeKey(data.source || 'apps');
+      const tgt = normalizeNodeKey(data.target || 'core');
+      const sub = data.sub_target ? normalizeNodeKey(data.sub_target) : null;
+      const badge = `${data.method || 'GET'} ${data.status || 200}`;
 
-      // Badge label for moving particle
-      const badgeLabel = `${data.method || 'GET'} ${data.status || 200}`;
-
-      // Spawn primary particle from source to target
-      spawnPacket(data.source || 'hub', data.target || 'core', data.color || '#3b82f6', badgeLabel, 1.25, () => {
-        // If sub-target exists (e.g. core -> mysql or core -> postgres or mqtt -> influxdb), trigger secondary hop!
-        if (data.sub_target && data.sub_target !== data.target) {
-          spawnPacket(data.target || 'core', data.sub_target, data.color || '#3b82f6', data.tag || 'DB_SYNC', 1.35, () => {
-            // If sub-target was influxdb, trigger downstream visual query to grafana
-            if (data.sub_target === 'influxdb') {
-              spawnPacket('influxdb', 'grafana', '#ec4899', 'FLUX_QUERY', 1.45);
-            }
-          });
+      spawnPacket(src, tgt, data.color || '#3b82f6', badge, 1.25, () => {
+        if (sub && sub !== tgt) {
+          spawnPacket(tgt, sub, data.color || '#3b82f6', data.tag || 'SYNC', 1.35);
         }
       });
-
-      // Log in terminal stream
-      logTerminal(`log-tag-${data.source || 'api'}`, data.tag || 'API_REAL', `${data.detail}`);
+      logTerminal(`log-tag-${src}`, data.tag || 'API', data.detail || `${data.method} ${data.path}`);
     }
 
     async function hydrateInitialTraffic() {
@@ -1618,104 +1739,58 @@
         const json = await res.json();
         if (json.stats) {
           packetCount = json.stats.total_requests || 0;
-          const countEl = document.getElementById('sim-packet-count');
-          if (countEl) countEl.innerText = packetCount.toLocaleString();
-
-          const latEl = document.getElementById('sim-latency');
-          if (latEl) latEl.innerText = `${json.stats.avg_latency_ms || 1.2} ms`;
+          const c = document.getElementById('sim-packet-count');
+          if (c) c.innerText = packetCount.toLocaleString();
+          const l = document.getElementById('sim-latency');
+          if (l) l.innerText = `${json.stats.avg_latency_ms || 1.2} ms`;
         }
-
-        // Hydrate initial log terminal with real history
-        if (json.data && json.data.length > 0) {
-          json.data.slice(-5).forEach(d => {
-            logTerminal(`log-tag-${d.source || 'api'}`, d.tag || 'HISTORY', `${d.detail}`);
-          });
-        }
+        (json.data || []).slice(-6).forEach(d => {
+          logTerminal(`log-tag-${normalizeNodeKey(d.source || 'core')}`, d.tag || 'HISTORY', d.detail || d.path);
+        });
       } catch (e) {}
     }
-
-    // ═════════════════════════════════════════════════════════════════════════
-    // MANUAL ACTION BUTTONS (EXECUTES REAL API CALLS VIA BACKEND)
-    // ═════════════════════════════════════════════════════════════════════════
 
     async function triggerSimAction(action) {
       try {
         await fetch('/api/v1/traffic/simulate', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: action })
+          body: JSON.stringify({ action }),
         });
-      } catch (err) {
-        console.warn('Simulate fetch error:', err);
-      }
-    }
-
-    function simulateNfcTap() {
-      triggerSimAction('nfc_tap');
-    }
-
-    function simulateTelemetryPing() {
-      triggerSimAction('telemetry');
-    }
-
-    function simulateNfcSync() {
-      triggerSimAction('nfc_sync');
-    }
-
-    function simulateDnsIngress() {
-      triggerSimAction('dns_ingress');
-    }
-
-    function simulateStockTransaction() {
-      triggerSimAction('stock');
-    }
-
-    function simulatePsmDeploy() {
-      triggerSimAction('psm_deploy');
-    }
-
-    function simulateBackupTrigger() {
-      triggerSimAction('backup');
+      } catch (e) {}
     }
 
     function toggleAutoSimulation() {
       const btn = document.getElementById('btn-toggle-auto');
-      const text = document.getElementById('auto-status-indicator');
+      const txt = document.getElementById('auto-status-indicator');
       if (autoSimInterval) {
         stopAutoSimulation();
-        btn.classList.remove('active');
-        text.innerText = '▶️ Auto Test Generator';
+        btn?.classList.remove('active');
+        if (txt) txt.innerText = '▶️ Auto Flow';
       } else {
-        startAutoSimulation();
-        btn.classList.add('active');
-        text.innerText = '⏸️ Jeda Generator';
+        const actions = ['nfc_tap', 'telemetry', 'dns_ingress', 'stock', 'psm_deploy', 'minio_s3', 'health_check'];
+        autoSimInterval = setInterval(() => {
+          triggerSimAction(actions[Math.floor(Math.random() * actions.length)]);
+        }, 3500);
+        btn?.classList.add('active');
+        if (txt) txt.innerText = '⏸️ Jeda Flow';
       }
-    }
-
-    function startAutoSimulation() {
-      if (autoSimInterval) clearInterval(autoSimInterval);
-      autoSimInterval = setInterval(() => {
-        const actions = ['nfc_tap', 'telemetry', 'nfc_sync', 'dns_ingress', 'stock', 'psm_deploy'];
-        const chosen = actions[Math.floor(Math.random() * actions.length)];
-        triggerSimAction(chosen);
-      }, 4000);
     }
 
     function stopAutoSimulation() {
-      if (autoSimInterval) {
-        clearInterval(autoSimInterval);
-        autoSimInterval = null;
-      }
+      if (autoSimInterval) { clearInterval(autoSimInterval); autoSimInterval = null; }
     }
+
     // ═════════════════════════════════════════════════════════════════════════
     // BACKUPS API
     // ═════════════════════════════════════════════════════════════════════════
     async function loadBackups() {
       const tbody = document.getElementById('backup-table-body');
       try {
-        const [res, flowRes] = await Promise.all([
+        const [res, flowRes, jobsRes] = await Promise.all([
           fetch('/api/v1/backups'),
-          fetch('/api/v1/backups/flow-status').catch(() => null)
+          fetch('/api/v1/backups/flow-status').catch(() => null),
+          fetch('/api/v1/backups/jobs').catch(() => null),
         ]);
         const json = await res.json();
         const data = json.data || [];
@@ -1727,68 +1802,65 @@
           if (s3Badge) {
             s3Badge.className = s3.reachable ? 'badge badge-success' : 'badge badge-info';
             s3Badge.innerText = s3.reachable
-              ? `☁️ MinIO S3 Active (${s3.replicated_archives_count || 0} synced)`
+              ? `☁️ MinIO S3 Online (${s3.replicated_archives_count || 0} synced)`
               : `☁️ S3 Vault (${s3.replicated_archives_count || 0} synced)`;
           }
         }
 
-        const countEl = document.getElementById('stat-backup-count');
-        if (countEl) countEl.innerText = data.length;
-        const totalMb = ((json.total_storage_bytes || 0) / (1024 * 1024)).toFixed(2);
-        const sizeEl = document.getElementById('stat-backup-size');
-        if (sizeEl) sizeEl.innerText = `${totalMb} MB terpakai`;
+        if (jobsRes && jobsRes.ok) {
+          const jobsJson = await jobsRes.json();
+          const activeJobs = (jobsJson.data || []).filter(j => j.status === 'queued' || j.status === 'running');
+          const jobsBar = document.getElementById('backup-jobs-bar');
+          if (jobsBar) {
+            if (activeJobs.length > 0) {
+              jobsBar.style.display = 'block';
+              jobsBar.innerText = `⏳ ${activeJobs.length} job backup sedang berjalan: ${activeJobs.map(j => `${j.job_id} (${j.stage || j.status})`).join(', ')}`;
+            } else {
+              jobsBar.style.display = 'none';
+            }
+          }
+        }
 
         if (data.length === 0) {
-          tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-muted); padding: 2rem;">Belum ada arsip backup. Klik tombol "Buat Backup Baru" untuk mencadangkan.</td></tr>';
+          tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; color:var(--text-muted); padding:2rem;">Belum ada arsip backup.</td></tr>';
           return;
         }
 
         tbody.innerHTML = data.map(b => {
           const dateStr = new Date(b.created_at).toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' });
           const dbEntries = Object.entries(b.databases || {});
-          let dbs = '-';
-          if (dbEntries.length > 0) {
-            dbs = dbEntries.map(([name, info]) => {
-              const ok = info && (info.status === 'ok' || info.status === 'success');
-              const skipped = info && String(info.status || '').startsWith('skipped');
-              const color = ok ? '#34d399' : (skipped ? '#fbbf24' : '#f87171');
-              const rows = (info && info.rows !== undefined) ? ` (${info.rows}r)` : '';
-              return `<span style="display:inline-block; margin:2px; font-size:0.75rem; background:#0f172a; padding:2px 6px; border-radius:4px; border:1px solid #1e293b; color:${color};">${name}${rows}</span>`;
-            }).join('');
-          }
-          const s3Pill = b.s3_synced
-            ? `<span class="badge badge-cyan" style="font-size:0.68rem; padding:0.15rem 0.45rem; margin-left:0.35rem;">☁️ S3</span>`
-            : '';
+          const dbs = dbEntries.length === 0 ? '-' : dbEntries.map(([name, info]) => {
+            const ok = info && (info.status === 'ok' || info.status === 'success');
+            const skipped = info && String(info.status || '').startsWith('skipped');
+            const color = ok ? '#34d399' : (skipped ? '#fbbf24' : '#f87171');
+            const rows = (info && info.rows !== undefined) ? ` (${info.rows}r)` : '';
+            return `<span style="display:inline-block; margin:2px; font-size:0.73rem; background:#0b1326; padding:2px 6px; border-radius:4px; border:1px solid #1e293b; color:${color};">${escapeHtml(name)}${escapeHtml(rows)}</span>`;
+          }).join('');
+          const s3Pill = b.s3_synced ? '<span class="badge badge-cyan" style="font-size:0.66rem; padding:0.12rem 0.4rem; margin-left:0.35rem;">☁️ S3</span>' : '';
+          const fnEnc = encodeURIComponent(b.filename);
           return `
             <tr>
-              <td>
-                <b>${b.filename}</b>${s3Pill}
-                ${b.note ? `<div style="font-size: 0.75rem; color: var(--text-muted);">${b.note}</div>` : ''}
-              </td>
-              <td><span class="badge badge-info">${b.scope}</span></td>
-              <td><b>${b.size_human}</b></td>
-              <td>${dateStr}</td>
-              <td><div>${dbs}</div></td>
-              <td style="white-space: nowrap;">
-                <a href="/api/v1/backups/${encodeURIComponent(b.filename)}/download" class="btn btn-primary btn-sm" title="Unduh Arsip">⬇️ Unduh</a>
-                <button onclick="verifyBackup('${b.filename}')" class="btn btn-sm" style="background: #0284c7; color: #fff;" title="Verifikasi Integritas">🔍 Verifikasi</button>
-                <button onclick="viewManifest('${b.filename}')" class="btn btn-sm" style="background: #334155; color: #fff;" title="Lihat Isi">📋 Isi</button>
-                <button onclick="deleteBackup('${b.filename}')" class="btn btn-danger btn-sm" title="Hapus">🗑️</button>
+              <td><b>${escapeHtml(b.filename)}</b>${s3Pill}${b.note ? `<div style="font-size:0.74rem; color:var(--text-muted);">${escapeHtml(b.note)}</div>` : ''}</td>
+              <td><span class="badge badge-info">${escapeHtml(b.scope)}</span></td>
+              <td><b>${escapeHtml(b.size_human)}</b></td>
+              <td>${escapeHtml(dateStr)}</td>
+              <td>${dbs}</td>
+              <td style="white-space:nowrap;">
+                <a href="/api/v1/backups/${fnEnc}/download" class="btn btn-primary btn-sm">⬇️ Unduh</a>
+                <button onclick="verifyBackup(decodeURIComponent('${fnEnc}'))" class="btn btn-sm" style="background:#0284c7; color:#fff;">🔍 Verifikasi</button>
+                <button onclick="viewManifest(decodeURIComponent('${fnEnc}'))" class="btn btn-secondary btn-sm">📋 Isi</button>
+                <button onclick="deleteBackup(decodeURIComponent('${fnEnc}'))" class="btn btn-danger btn-sm">🗑️</button>
               </td>
             </tr>
           `;
         }).join('');
       } catch (err) {
-        tbody.innerHTML = `<tr><td colspan="6" style="text-align: center; color: #f87171; padding: 2rem;">Gagal memuat arsip backup: ${err.message}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; color:#f87171; padding:2rem;">Gagal memuat backup: ${escapeHtml(err.message)}</td></tr>`;
       }
     }
 
-    function openCreateBackupModal() {
-      document.getElementById('modal-create-backup').classList.add('active');
-    }
-    function closeCreateBackupModal() {
-      document.getElementById('modal-create-backup').classList.remove('active');
-    }
+    function openCreateBackupModal() { document.getElementById('modal-create-backup').classList.add('active'); }
+    function closeCreateBackupModal() { document.getElementById('modal-create-backup').classList.remove('active'); }
 
     async function handleCreateBackup(e) {
       e.preventDefault();
@@ -1797,192 +1869,166 @@
       const sync_to_s3 = document.getElementById('backup-sync-s3')?.checked ?? true;
       const async_mode = document.getElementById('backup-async-mode')?.checked ?? false;
       const btn = document.getElementById('btn-submit-backup');
-      const origText = btn.innerHTML;
+      const orig = btn.innerHTML;
       btn.disabled = true;
-      btn.innerHTML = '<span class="spinner"></span> Sedang Mencadangkan...';
-
+      btn.innerHTML = '<span class="spinner"></span> Mencadangkan...';
       try {
         const res = await fetch('/api/v1/backups/create', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ scope, note, sync_to_s3, async_mode })
+          body: JSON.stringify({ scope, note, sync_to_s3, async_mode }),
         });
         const json = await res.json();
         if (res.ok) {
           closeCreateBackupModal();
-          showNotification('success', json.message || 'Backup berhasil dibuat!');
+          showNotification('backup-alert', 'success', json.message || 'Backup selesai dibuat!');
           loadBackups();
+          refreshCentralPulse();
           if (async_mode) setTimeout(loadBackups, 3500);
-          simulateBackupTrigger();
         } else {
-          showNotification('danger', json.detail || 'Gagal membuat backup');
+          showNotification('backup-alert', 'danger', json.detail || 'Gagal membuat backup');
         }
       } catch (err) {
-        showNotification('danger', 'Error membuat backup: ' + err.message);
+        showNotification('backup-alert', 'danger', 'Error: ' + err.message);
       } finally {
         btn.disabled = false;
-        btn.innerHTML = origText;
+        btn.innerHTML = orig;
+      }
+    }
+
+    async function pruneOldBackups() {
+      if (!confirm('Pangkas arsip backup lebih lama dari 7 hari (tetap simpan minimal 3 arsip terbaru)?')) return;
+      try {
+        const res = await fetch('/api/v1/backups/prune', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ keep_days: 7, keep_min: 3 }),
+        });
+        const json = await res.json();
+        showNotification('backup-alert', res.ok ? 'success' : 'danger', json.message || json.detail || 'Prune selesai');
+        loadBackups();
+      } catch (err) {
+        showNotification('backup-alert', 'danger', err.message);
       }
     }
 
     async function viewManifest(filename) {
       const modal = document.getElementById('modal-manifest');
       const content = document.getElementById('manifest-content');
+      document.getElementById('manifest-open-link').style.display = 'none';
       document.getElementById('manifest-modal-title').innerText = `📋 Manifest: ${filename}`;
-      content.innerText = 'Memuat manifest dari arsip...';
+      content.innerText = 'Memuat manifest...';
       modal.classList.add('active');
-
       try {
         const res = await fetch(`/api/v1/backups/${encodeURIComponent(filename)}/manifest`);
         const json = await res.json();
-        if (res.ok) {
-          content.innerText = JSON.stringify(json.data, null, 2);
-        } else {
-          content.innerText = 'Gagal memuat manifest: ' + (json.detail || 'Unknown error');
-        }
+        content.innerText = res.ok ? JSON.stringify(json.data, null, 2) : `Gagal: ${json.detail || 'Unknown'}`;
       } catch (err) {
         content.innerText = 'Error: ' + err.message;
       }
     }
 
-    function closeManifestModal() {
-      document.getElementById('modal-manifest').classList.remove('active');
-    }
+    function closeManifestModal() { document.getElementById('modal-manifest').classList.remove('active'); }
 
     async function verifyBackup(filename) {
       const modal = document.getElementById('modal-verify');
       const body = document.getElementById('verify-modal-body');
-      document.getElementById('verify-modal-title').innerText = `🔍 Verifikasi Arsip: ${filename}`;
-      body.innerHTML = `
-        <div style="text-align: center; padding: 2rem;">
-          <div class="spinner" style="display: inline-block; width: 32px; height: 32px; border: 3px solid rgba(255,255,255,0.2); border-top-color: #38bdf8; border-radius: 50%; animation: spin 0.8s linear infinite;"></div>
-          <div style="margin-top: 1rem; color: #94a3b8;">Sedang mengekstrak arsip, menguji integritas stream .tar.gz, validasi checksum SHA-256, dan validasi sintaks SQL/Flux...</div>
-        </div>
-      `;
+      document.getElementById('verify-modal-title').innerText = `🔍 Verifikasi: ${filename}`;
+      body.innerHTML = '<div style="text-align:center; padding:1.5rem;"><div class="spinner"></div><div style="margin-top:0.75rem; color:var(--text-muted);">Menguji integritas .tar.gz &amp; SHA-256...</div></div>';
       modal.classList.add('active');
-
       try {
         const res = await fetch(`/api/v1/backups/${encodeURIComponent(filename)}/verify`, { method: 'POST' });
         const json = await res.json();
-        if (!res.ok) {
-          body.innerHTML = `<div style="color: #f87171; padding: 1rem;">Gagal memverifikasi arsip: ${json.detail || 'Unknown error'}</div>`;
-          return;
-        }
-
+        if (!res.ok) { body.innerHTML = `<div style="color:#f87171;">${escapeHtml(json.detail || 'Gagal')}</div>`; return; }
         const rep = json.data || {};
-        const isPassed = rep.status === 'PASSED';
-        const badgeColor = isPassed ? '#10b981' : (rep.status === 'WARNING' ? '#f59e0b' : '#ef4444');
-
-        let dbHtml = '';
-        if (rep.databases && Object.keys(rep.databases).length > 0) {
-          dbHtml = Object.values(rep.databases).map(d => `
-            <div style="display: flex; justify-content: space-between; align-items: center; background: #0f172a; padding: 6px 12px; border-radius: 6px; margin-bottom: 4px; font-size: 0.8rem; border: 1px solid #1e293b;">
-              <div>
-                <b>${d.file}</b>
-                <span style="color: #64748b; margin-left: 8px;">${d.size_human} (${d.format})</span>
-              </div>
-              <span class="badge ${d.valid ? 'badge-success' : 'badge-danger'}">${d.valid ? '✓ Valid Format' : '✗ Kosong/Corrupted'}</span>
-            </div>
-          `).join('');
-        } else {
-          dbHtml = '<div style="color: #64748b; font-size: 0.8rem; padding: 4px;">Tidak ada database dalam arsip ini.</div>';
-        }
-
-        let cfgHtml = '';
-        if (rep.configs && Object.keys(rep.configs).length > 0) {
-          cfgHtml = Object.values(rep.configs).map(c => `
-            <div style="display: flex; justify-content: space-between; align-items: center; background: #0f172a; padding: 6px 12px; border-radius: 6px; margin-bottom: 4px; font-size: 0.8rem; border: 1px solid #1e293b;">
-              <div>
-                <b>${c.file}</b>
-                <span style="color: #64748b; margin-left: 8px;">${c.size_human}</span>
-              </div>
-              <span class="badge ${c.valid ? 'badge-success' : 'badge-danger'}">${c.valid ? '✓ Utuh' : '✗ Kosong'}</span>
-            </div>
-          `).join('');
-        } else {
-          cfgHtml = '<div style="color: #64748b; font-size: 0.8rem; padding: 4px;">Tidak ada file konfigurasi dalam arsip ini.</div>';
-        }
-
+        const badgeColor = rep.status === 'PASSED' ? '#10b981' : (rep.status === 'WARNING' ? '#f59e0b' : '#ef4444');
         body.innerHTML = `
-          <div style="display: flex; gap: 1rem; margin-bottom: 1.25rem;">
-            <div style="flex: 1; background: #0f172a; padding: 1rem; border-radius: 8px; border: 1px solid #1e293b; text-align: center;">
-              <div style="color: #64748b; font-size: 0.75rem; text-transform: uppercase;">Status Integritas</div>
-              <div style="font-size: 1.4rem; font-weight: 800; color: ${badgeColor}; margin-top: 4px;">${rep.status}</div>
-            </div>
-            <div style="flex: 1; background: #0f172a; padding: 1rem; border-radius: 8px; border: 1px solid #1e293b; text-align: center;">
-              <div style="color: #64748b; font-size: 0.75rem; text-transform: uppercase;">Skor Kelayakan Restore</div>
-              <div style="font-size: 1.4rem; font-weight: 800; color: #38bdf8; margin-top: 4px;">${rep.integrity_score_percent}%</div>
-            </div>
-            <div style="flex: 1; background: #0f172a; padding: 1rem; border-radius: 8px; border: 1px solid #1e293b; text-align: center;">
-              <div style="color: #64748b; font-size: 0.75rem; text-transform: uppercase;">Total File Diarsip</div>
-              <div style="font-size: 1.4rem; font-weight: 800; color: #a78bfa; margin-top: 4px;">${rep.total_files || 0} File</div>
-            </div>
+          <div class="grid-3" style="margin-bottom:1rem;">
+            <div class="card" style="text-align:center;"><div class="card-desc">Status</div><div class="card-stat" style="color:${badgeColor};">${escapeHtml(rep.status)}</div></div>
+            <div class="card" style="text-align:center;"><div class="card-desc">Skor Integritas</div><div class="card-stat" style="color:#38bdf8;">${rep.integrity_score_percent || 0}%</div></div>
+            <div class="card" style="text-align:center;"><div class="card-desc">Total File</div><div class="card-stat" style="color:#a78bfa;">${rep.total_files || 0}</div></div>
           </div>
-
-          <div style="background: #0b1426; padding: 0.75rem 1rem; border-radius: 6px; font-family: monospace; font-size: 0.75rem; color: #94a3b8; margin-bottom: 1rem; word-break: break-all; border: 1px solid #1e3a8a;">
-            <div><b>SHA-256 Checksum:</b> ${rep.sha256}</div>
-            <div style="margin-top: 4px;"><b>Struktur Tar.gz:</b> ${rep.tar_intact ? '✅ Valid Archive Stream' : '❌ Corrupted'} | <b>Manifest:</b> ${rep.manifest_intact ? '✅ Valid JSON Metadata' : '❌ Missing'}</div>
-          </div>
-
-          <div style="margin-bottom: 1rem;">
-            <div style="font-weight: 700; font-size: 0.85rem; color: #cbd5e1; margin-bottom: 0.5rem;">📁 Database Dump Verification:</div>
-            ${dbHtml}
-          </div>
-
-          <div>
-            <div style="font-weight: 700; font-size: 0.85rem; color: #cbd5e1; margin-bottom: 0.5rem;">⚙️ System &amp; Network Config Verification:</div>
-            ${cfgHtml}
-          </div>
+          <div class="code-preview">SHA-256: ${escapeHtml(rep.sha256 || '-')}\nTar Stream: ${rep.tar_intact ? 'VALID' : 'CORRUPTED'} | Manifest: ${rep.manifest_intact ? 'VALID' : 'MISSING'}</div>
         `;
       } catch (err) {
-        body.innerHTML = `<div style="color: #f87171; padding: 1rem;">Error memverifikasi: ${err.message}</div>`;
+        body.innerHTML = `<div style="color:#f87171;">Error: ${escapeHtml(err.message)}</div>`;
       }
     }
 
-    function closeVerifyModal() {
-      document.getElementById('modal-verify').classList.remove('active');
-    }
+    function closeVerifyModal() { document.getElementById('modal-verify').classList.remove('active'); }
 
     async function deleteBackup(filename) {
       if (!confirm(`Hapus arsip backup ${filename}?`)) return;
       try {
         const res = await fetch(`/api/v1/backups/${encodeURIComponent(filename)}`, { method: 'DELETE' });
         const json = await res.json();
-        if (res.ok) {
-          showNotification('success', json.message);
-          loadBackups();
-        } else {
-          showNotification('danger', json.detail || 'Gagal menghapus');
-        }
+        showNotification('backup-alert', res.ok ? 'success' : 'danger', json.message || json.detail || 'Selesai');
+        loadBackups();
       } catch (err) {
-        showNotification('danger', 'Error: ' + err.message);
+        showNotification('backup-alert', 'danger', err.message);
+      }
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // IOT FLEET
+    // ═════════════════════════════════════════════════════════════════════════
+    async function loadIotFleet() {
+      const container = document.getElementById('iot-cards-container');
+      const pill = document.getElementById('iot-consumer-pill');
+      const iot = STATE.pulse?.iot_pipeline || {};
+      if (pill) {
+        pill.className = iot.connected ? 'badge badge-success' : 'badge badge-cyan';
+        pill.innerText = `MQTT->PG (${iot.target_db || 'eternal_iot'}): ${iot.connected ? 'Connected' : (iot.running ? 'Running' : 'Standby')} • ${iot.messages_count || 0} msgs`;
+      }
+      if (!container) return;
+      try {
+        const res = await fetch('/api/devices/hierarchy');
+        const json = await res.json();
+        const devices = json.devices || json.data?.devices || (Array.isArray(json.data) ? json.data : []);
+        if (!devices || devices.length === 0) {
+          container.innerHTML = '<div class="card" style="background:#0b1426;"><div class="card-desc">Belum ada perangkat IoT yang merespons di /api/devices/hierarchy. Periksa worker MQTT atau gunakan tab Simulator.</div></div>';
+          return;
+        }
+        container.innerHTML = devices.map(d => {
+          const online = String(d.status || '').toLowerCase() === 'online';
+          const uid = d.device_uid || d.mac_address || d.id || '-';
+          const model = d.model || d.metadata?.model || d.device_type || 'ESP32';
+          const loc = d.location || d.metadata?.location || 'Workshop Homelab';
+          return `
+            <div class="card" style="background:#0b1426; border:1px solid ${online ? '#1d4ed8' : '#334155'};">
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.45rem;">
+                <span style="font-weight:800; color:#38bdf8;">${escapeHtml(d.name || uid)}</span>
+                <span class="badge ${online ? 'badge-success' : 'badge-warning'}">${escapeHtml(d.status || 'unknown')}</span>
+              </div>
+              <div style="font-family:monospace; font-size:0.75rem; color:var(--text-muted); margin-bottom:0.55rem;">${escapeHtml(uid)}</div>
+              <div style="font-size:0.82rem; color:#cbd5e1; display:flex; flex-direction:column; gap:0.25rem;">
+                <div>Model: <b>${escapeHtml(model)}</b></div>
+                <div>Lokasi: <b>${escapeHtml(loc)}</b></div>
+                <div>Pipeline: <code>Mosquitto :1883 &rarr; PG eternal_iot</code></div>
+              </div>
+            </div>
+          `;
+        }).join('');
+      } catch (err) {
+        container.innerHTML = `<div class="card"><div class="card-desc" style="color:#f87171;">Gagal memuat armada IoT: ${escapeHtml(err.message)}</div></div>`;
       }
     }
 
     async function syncIotTelemetry() {
       try {
-        simulateTelemetryPing();
+        triggerSimAction('telemetry');
         const res = await fetch('/api/devices/sync', { method: 'POST' });
         const json = await res.json();
-        alert('Sinkronisasi armada Heatpress berhasil: ' + (json.message || 'Tersinkron dengan Prometheus'));
+        showNotification('backup-alert', 'success', json.message || 'Armada IoT tersinkronisasi.');
+        refreshCentralPulse(true);
+        loadIotFleet();
       } catch (err) {
-        alert('Gagal sinkronisasi: ' + err.message);
+        alert('Gagal sinkronisasi IoT: ' + err.message);
       }
     }
 
-    function showNotification(type, msg) {
-      const el = document.getElementById('backup-alert');
-      if (!el) return;
-      el.style.display = 'block';
-      el.style.backgroundColor = type === 'success' ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.2)';
-      el.style.color = type === 'success' ? '#34d399' : '#f87171';
-      el.style.border = `1px solid ${type === 'success' ? '#059669' : '#dc2626'}`;
-      el.innerText = msg;
-      setTimeout(() => { el.style.display = 'none'; }, 5000);
-    }
-
     // ═════════════════════════════════════════════════════════════════════════
-    // DNS MANAGEMENT
+    // DNS & VIRTUAL HOSTS
     // ═════════════════════════════════════════════════════════════════════════
     async function loadDnsRecords() {
       const tbody = document.getElementById('dns-table-body');
@@ -1990,84 +2036,87 @@
       try {
         const [resRecords, resStatus] = await Promise.all([
           fetch('/api/v1/dns/records'),
-          fetch('/api/v1/dns/status').catch(() => null)
+          fetch('/api/v1/dns/status').catch(() => null),
         ]);
         const json = await resRecords.json();
         const data = json.data || [];
 
         const countEl = document.getElementById('stat-dns-count');
         if (countEl) countEl.innerText = data.length;
+        const maintCount = data.filter(d => d.maintenance_mode).length;
+        const maintEl = document.getElementById('stat-dns-maint');
+        if (maintEl) maintEl.innerText = `${maintCount} dalam mode maintenance`;
 
         if (resStatus && resStatus.ok) {
           const stJson = await resStatus.json();
-          const d = stJson.data || {};
-          const bEl = document.getElementById('dns-status-badge');
-          if (bEl) bEl.innerText = `${d.dns_server_port_53} (:53)`;
+          const st = stJson.data || {};
+          const dnsEl = document.getElementById('dns-status-badge');
+          if (dnsEl) dnsEl.innerText = `CoreDNS: ${st.dns_server_port_53 || 'ONLINE'}`;
+          const rtrEl = document.getElementById('router-status-badge');
+          if (rtrEl) rtrEl.innerText = `Nginx Ingress: ${st.ingress_router_port_80 || 'ONLINE'}`;
         }
 
         if (data.length === 0) {
-          tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: var(--text-muted); padding: 2rem;">Belum ada domain terdaftar.</td></tr>';
+          tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; color:var(--text-muted); padding:2rem;">Belum ada domain terdaftar.</td></tr>';
           return;
         }
 
         tbody.innerHTML = data.map(d => {
-          const badgeClass = d.is_system ? 'badge-success' : 'badge-info';
+          const domEnc = encodeURIComponent(d.domain);
+          const maintPill = d.maintenance_mode ? '<span class="badge badge-warning">Maintenance 503</span>' : '<span class="badge badge-success">Active</span>';
+          const tsLine = d.tailscale_domain ? `<div style="font-size:0.73rem; color:var(--text-muted); margin-top:2px;">TS: <a href="${escapeHtml(d.tailscale_url || '#')}" target="_blank" style="color:#a78bfa; text-decoration:none;">${escapeHtml(d.tailscale_domain)}</a></div>` : '';
           return `
             <tr>
               <td>
-                <a href="${d.url}" target="_blank" style="color: #60a5fa; font-weight: 700; text-decoration: none; display: inline-flex; align-items: center; gap: 0.35rem;">
-                  🌐 ${d.domain} ↗
-                </a>
+                <a href="${escapeHtml(d.url)}" target="_blank" style="color:#60a5fa; font-weight:700; text-decoration:none;">🌐 ${escapeHtml(d.domain)} ↗</a>
+                ${tsLine}
               </td>
-              <td><span class="badge ${badgeClass}">${d.category}</span></td>
-              <td><code>${d.target}</code></td>
-              <td style="color: var(--text-muted);">${d.description}</td>
+              <td><span class="badge ${d.is_system ? 'badge-success' : 'badge-info'}">${escapeHtml(d.category)}</span></td>
+              <td><code>${escapeHtml(d.target)}</code></td>
+              <td>${maintPill}</td>
               <td>
-                ${d.is_system ? '<span style="color: var(--text-muted); font-size: 0.75rem;">Sistem Utama</span>' : `
-                  <button onclick="deleteDomainRoute('${d.domain}')" class="btn btn-danger btn-sm" title="Hapus Rute">🗑️</button>
-                `}
+                ${d.is_system ? '<span style="color:var(--text-dim); font-size:0.74rem;">Core Homelab</span>' : `<button onclick="deleteDomainRoute(decodeURIComponent('${domEnc}'))" class="btn btn-danger btn-sm">🗑️</button>`}
               </td>
             </tr>
           `;
         }).join('');
       } catch (err) {
-        tbody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: #f87171; padding: 2rem;">Gagal memuat domain: ${err.message}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; color:#f87171; padding:2rem;">Gagal memuat domain: ${escapeHtml(err.message)}</td></tr>`;
       }
     }
 
-    function openAddDomainModal() {
-      document.getElementById('modal-add-domain').classList.add('active');
-    }
-    function closeAddDomainModal() {
-      document.getElementById('modal-add-domain').classList.remove('active');
-    }
+    function openAddDomainModal() { document.getElementById('modal-add-domain').classList.add('active'); }
+    function closeAddDomainModal() { document.getElementById('modal-add-domain').classList.remove('active'); }
 
     async function handleAddDomain(e) {
       e.preventDefault();
       const domain = document.getElementById('domain-name').value;
       const target_port = parseInt(document.getElementById('domain-port').value, 10);
       const target_host = document.getElementById('domain-host').value || 'host.docker.internal';
+      const maintenance_mode = document.getElementById('domain-maint-mode')?.checked ?? false;
+      const maintenance_title = document.getElementById('domain-maint-title')?.value || null;
+      const maintenance_eta = document.getElementById('domain-maint-eta')?.value || null;
       const btn = document.getElementById('btn-submit-domain');
       const orig = btn.innerHTML;
       btn.disabled = true;
       btn.innerHTML = '<span class="spinner"></span> Menyimpan...';
-
       try {
         const res = await fetch('/api/v1/dns/records', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ domain, target_port, target_host })
+          body: JSON.stringify({ domain, target_port, target_host, maintenance_mode, maintenance_title, maintenance_eta }),
         });
         const json = await res.json();
         if (res.ok) {
           closeAddDomainModal();
-          showNotification('success', json.message || 'Domain berhasil didaftarkan!');
+          showNotification('dns-alert', 'success', json.message || 'Domain berhasil didaftarkan!');
           loadDnsRecords();
+          refreshCentralPulse(true);
         } else {
-          showNotification('danger', json.detail || 'Gagal mendaftarkan domain');
+          showNotification('dns-alert', 'danger', json.detail || 'Gagal mendaftarkan domain');
         }
       } catch (err) {
-        showNotification('danger', 'Error: ' + err.message);
+        showNotification('dns-alert', 'danger', 'Error: ' + err.message);
       } finally {
         btn.disabled = false;
         btn.innerHTML = orig;
@@ -2079,38 +2128,94 @@
       try {
         const res = await fetch(`/api/v1/dns/records/${encodeURIComponent(domain)}`, { method: 'DELETE' });
         const json = await res.json();
-        if (res.ok) {
-          showNotification('success', json.message);
-          loadDnsRecords();
-        } else {
-          showNotification('danger', json.detail || 'Gagal menghapus');
-        }
+        showNotification('dns-alert', res.ok ? 'success' : 'danger', json.message || json.detail || 'Selesai');
+        loadDnsRecords();
+        refreshCentralPulse(true);
       } catch (err) {
-        showNotification('danger', 'Error: ' + err.message);
+        showNotification('dns-alert', 'danger', err.message);
       }
     }
 
     // ═════════════════════════════════════════════════════════════════════════
-    // INITIALIZATION
+    // API EXPLORER (TAB 7)
     // ═════════════════════════════════════════════════════════════════════════
+    const API_ENDPOINTS = [
+      { method: 'GET', path: '/health', mod: 'System', desc: 'Pemeriksaan kesehatan PAP Core Gateway' },
+      { method: 'GET', path: '/api/v1/system/central-pulse', mod: 'Central Engine', desc: 'Snapshot lengkap server, Docker, DB, DNS, IoT & S3 Vault' },
+      { method: 'GET', path: '/api/v1/system/services', mod: 'Central Engine', desc: 'Katalog seluruh layanan dengan URL LAN, Tailscale & .homelab' },
+      { method: 'GET', path: '/api/v1/system/worker-status', mod: 'IoT Consumer', desc: 'Status in-process MQTT->PostgreSQL consumer atau pap-worker' },
+      { method: 'GET', path: '/api/v1/dns/status', mod: 'DNS & Ingress', desc: 'Status reachability CoreDNS (:53) & Nginx Ingress (:80)' },
+      { method: 'GET', path: '/api/v1/dns/records', mod: 'DNS & Ingress', desc: 'Daftar domain .homelab, .tailscale.homelab & status maintenance' },
+      { method: 'GET', path: '/api/v1/backups/flow-status', mod: 'Disaster Recovery', desc: 'Status local vault, MinIO S3 bucket backups & job aktif' },
+      { method: 'GET', path: '/api/v1/backups', mod: 'Disaster Recovery', desc: 'Daftar arsip backup .tar.gz beserta status replikasi S3' },
+      { method: 'GET', path: '/api/devices/hierarchy', mod: 'IoT Fleet', desc: 'Hirarki perangkat Heatpress ESP32 & status online' },
+      { method: 'GET', path: '/api/v1/traffic/stats', mod: 'Telemetry', desc: 'Statistik request gateway & subscriber WebSocket/SSE' },
+    ];
+
+    function renderApiExplorer() {
+      const tbody = document.getElementById('api-catalog-body');
+      if (!tbody) return;
+      tbody.innerHTML = API_ENDPOINTS.map((ep, i) => `
+        <tr>
+          <td><code>${ep.method} ${escapeHtml(ep.path)}</code></td>
+          <td><span class="badge badge-info">${escapeHtml(ep.mod)}</span></td>
+          <td style="color:var(--text-muted);">${escapeHtml(ep.desc)}</td>
+          <td><button class="btn btn-primary btn-sm" onclick="testGatewayEndpoint(${i})">▶ Test GET</button></td>
+        </tr>
+      `).join('');
+    }
+
+    async function testGatewayEndpoint(idx) {
+      const ep = API_ENDPOINTS[idx];
+      if (!ep) return;
+      const outWrap = document.getElementById('api-test-output');
+      const meta = document.getElementById('api-test-meta');
+      const jsonBox = document.getElementById('api-test-json');
+      outWrap.style.display = 'block';
+      meta.innerText = `Menguji GET ${ep.path}...`;
+      jsonBox.innerText = 'Loading...';
+      try {
+        const res = await fetch(ep.path);
+        const ms = res.headers.get('X-Response-Time-Ms') || '-';
+        const body = await res.json();
+        meta.innerText = `GET ${ep.path} -> HTTP ${res.status} (${ms} ms)`;
+        jsonBox.innerText = JSON.stringify(body, null, 2);
+      } catch (err) {
+        meta.innerText = `GET ${ep.path} -> ERROR`;
+        jsonBox.innerText = err.message;
+      }
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // HELPERS & INITIALIZATION
+    // ═════════════════════════════════════════════════════════════════════════
+    function showNotification(elId, type, msg) {
+      const el = document.getElementById(elId);
+      if (!el) return;
+      el.style.display = 'block';
+      el.style.backgroundColor = type === 'success' ? 'rgba(16, 185, 129, 0.18)' : 'rgba(239, 68, 68, 0.18)';
+      el.style.color = type === 'success' ? '#34d399' : '#f87171';
+      el.style.border = `1px solid ${type === 'success' ? '#059669' : '#dc2626'}`;
+      el.innerText = msg;
+      setTimeout(() => { el.style.display = 'none'; }, 5500);
+    }
+
     async function checkWorkerStatus() {
       const el = document.getElementById('worker-status-badge');
       if (!el) return;
       try {
         const res = await fetch('/api/v1/system/worker-status');
-        if (res.ok) {
-          const json = await res.json();
-          const d = json.data || {};
-          if (d.healthy) {
-            el.className = 'badge badge-success';
-            el.innerText = `Worker Active • Decoupled (${d.details?.uptime_sec || 0}s)`;
-          } else if (d.status === 'not_registered') {
-            el.className = 'badge badge-info';
-            el.innerText = 'Internal Mode';
-          } else {
-            el.className = 'badge badge-danger';
-            el.innerText = `Worker ${d.status}`;
-          }
+        if (!res.ok) return;
+        const json = await res.json();
+        const d = json.data || {};
+        if (d.healthy) {
+          el.className = 'badge badge-success';
+          el.innerText = d.role === 'in_process_consumer'
+            ? `In-Process MQTT Active (${d.details?.mqtt_messages_processed || 0} msgs)`
+            : `Worker Active (${d.details?.uptime_sec || 0}s)`;
+        } else {
+          el.className = 'badge badge-info';
+          el.innerText = d.status || 'Standby';
         }
       } catch (e) {}
     }
@@ -2118,13 +2223,16 @@
     window.addEventListener('resize', resizeCanvas);
 
     document.addEventListener('DOMContentLoaded', () => {
+      setNetworkMode(detectInitialNetworkMode());
       resizeCanvas();
       lastFrameTime = performance.now();
       requestAnimationFrame(animateParticles);
+      renderApiExplorer();
       hydrateInitialTraffic();
       connectRealtimeTraffic();
-      loadBackups();
+      refreshCentralPulse(false);
       checkWorkerStatus();
+      setInterval(() => refreshCentralPulse(false), 15000);
       setInterval(checkWorkerStatus, 15000);
     });
   </script>

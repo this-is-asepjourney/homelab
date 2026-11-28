@@ -6,13 +6,14 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
+from app.core.config import get_settings
 from app.modules.traffic.broadcaster import traffic_broadcaster
 
 router = APIRouter(prefix="/traffic", tags=["Topology & Traffic Streaming"])
 
 
 class SimulateRequest(BaseModel):
-    action: str = "nfc_tap"  # "nfc_tap", "telemetry", "stock", "psm_deploy", "backup"
+    action: str = "nfc_tap"  # "nfc_tap", "telemetry", "nfc_sync", "dns_ingress", "stock", "psm_deploy", "minio_s3", "health_check", "backup"
     client_ip: str = "192.168.25.104"
 
 
@@ -100,8 +101,10 @@ async def ingest_traffic_event(payload: TrafficEventPayload) -> Dict[str, Any]:
 
 @router.post("/simulate")
 async def simulate_api_action(payload: SimulateRequest) -> Dict[str, Any]:
-    """Triggers realistic multi-hop event through the central core gateway."""
+    """Triggers realistic multi-hop event through the central core gateway matching current 2026 homelab flow."""
     action = payload.action
+    settings = get_settings()
+    lan_ip = getattr(settings, "SERVER_LAN_IP", "192.168.25.105")
 
     if action == "nfc_tap":
         traffic_broadcaster.record_and_broadcast(
@@ -112,15 +115,14 @@ async def simulate_api_action(payload: SimulateRequest) -> Dict[str, Any]:
             client_ip=payload.client_ip or "192.168.25.104",
             source="esp32",
             target="core",
-            sub_target="mysql",
+            sub_target="postgres",
             tag="NFC_TAP",
             color="#34d399",
             detail="ESP32 (192.168.25.104) -> POST /api/nfc/tap [UID: 058E208F87A200]",
         )
-        # Follow-up DB verification and relay/buzzer feedback
-        asyncio.create_task(_delay_broadcast(0.35, "core", "mysql", "DB_AUTH", "#fbbf24", "Core -> MySQL :3306 [SELECT user FROM nfc_users WHERE uid=...]"))
-        asyncio.create_task(_delay_broadcast(0.70, "core", "esp32", "UNLOCKED", "#22d3ee", "Core -> ESP32 [Relay GPIO26 HIGH 2 Jam, Buzzer Bip 1x]"))
-        asyncio.create_task(_delay_broadcast(0.90, "core", "hub", "FLEET_SYNC", "#34d399", "Core -> HeatpressHub [Operator Ferdiansyah Active]"))
+        asyncio.create_task(_delay_broadcast(0.32, "core", "postgres", "PG_AUTH", "#60a5fa", "Core -> PostgreSQL eternal_iot :5432 [Verify nfc_users & log tap]"))
+        asyncio.create_task(_delay_broadcast(0.65, "core", "esp32", "UNLOCKED", "#22d3ee", "Core -> ESP32 [Relay GPIO26 HIGH, Buzzer OK]"))
+        asyncio.create_task(_delay_broadcast(0.90, "core", "grafana", "METRICS", "#f43f5e", "Core /metrics -> Grafana IoT Dashboard :3000"))
 
     elif action == "nfc_sync":
         traffic_broadcaster.record_and_broadcast(
@@ -128,16 +130,16 @@ async def simulate_api_action(payload: SimulateRequest) -> Dict[str, Any]:
             path="/api/nfc/users",
             status=201,
             duration_ms=3.4,
-            client_ip="192.168.25.101:8088",
-            source="hub",
+            client_ip=f"{lan_ip}:80",
+            source="apps",
             target="core",
-            sub_target="mysql",
+            sub_target="postgres",
             tag="USER_REG",
             color="#34d399",
-            detail="HeatpressHub Web -> POST /api/nfc/users [UID: 058E208F87A200 Ferdiansyah]",
+            detail="Web App -> POST /api/nfc/users [Register Operator NFC UID]",
         )
-        asyncio.create_task(_delay_broadcast(0.35, "core", "mysql", "MYSQL_WRITE", "#fbbf24", "Core -> MySQL eternal_db [INSERT INTO nfc_users]"))
-        asyncio.create_task(_delay_broadcast(0.70, "core", "esp32", "NVS_PUSH", "#38bdf8", "Core -> ESP32 POST /api/nfc/register_user [Tulis ke Flash NVS]"))
+        asyncio.create_task(_delay_broadcast(0.32, "core", "postgres", "PG_WRITE", "#60a5fa", "Core -> PostgreSQL eternal_iot [INSERT INTO nfc_users]"))
+        asyncio.create_task(_delay_broadcast(0.65, "core", "esp32", "NVS_PUSH", "#38bdf8", "Core -> ESP32 [Sync whitelist to Flash NVS]"))
 
     elif action == "telemetry":
         traffic_broadcaster.record_and_broadcast(
@@ -148,31 +150,33 @@ async def simulate_api_action(payload: SimulateRequest) -> Dict[str, Any]:
             client_ip=payload.client_ip or "192.168.25.104",
             source="esp32",
             target="mqtt",
-            sub_target="influxdb",
+            sub_target="core",
             tag="MQTT_PUB",
             color="#38bdf8",
             detail="ESP32 -> Mosquitto :1883 [/SysCtrl {temp: 36.4°C, hum: 37%, rssi: -55dBm}]",
         )
-        asyncio.create_task(_delay_broadcast(0.35, "mqtt", "core", "MQTT_SUB", "#38bdf8", "Mosquitto :1883 -> Core MqttInfluxConsumer (Async Worker)"))
-        asyncio.create_task(_delay_broadcast(0.65, "core", "influxdb", "INFLUX_WRITE", "#c084fc", "Core -> InfluxDB 2.7 :8086 [bucket=eternal_telemetry, org=homelab]"))
-        asyncio.create_task(_delay_broadcast(0.95, "influxdb", "grafana", "GRAFANA_QUERY", "#ec4899", "Grafana :3001 <- Mixed Flux Query [eternal-iot-dashboard]"))
+        asyncio.create_task(_delay_broadcast(0.30, "mqtt", "core", "MQTT_SUB", "#06b6d4", "Mosquitto :1883 -> PAP Core MqttPgConsumer (In-Process Worker)"))
+        asyncio.create_task(_delay_broadcast(0.60, "core", "postgres", "ETERNAL_PG", "#60a5fa", "Core -> PostgreSQL 16 :5432 [db=eternal_iot]"))
+        asyncio.create_task(_delay_broadcast(0.75, "mqtt", "prometheus", "TELEGRAF", "#f59e0b", "Mosquitto -> Telegraf :9273 -> Prometheus :9090"))
+        asyncio.create_task(_delay_broadcast(1.00, "prometheus", "grafana", "PROM_QL", "#f43f5e", "Grafana :3000 <- PromQL + PostgreSQL eternal_iot"))
 
     elif action == "dns_ingress":
         traffic_broadcaster.record_and_broadcast(
-            method="DNS_QUERY",
+            method="DNS_HTTP",
             path="*.homelab",
             status=200,
             duration_ms=0.8,
-            client_ip=payload.client_ip or "192.168.25.105",
+            client_ip=payload.client_ip or lan_ip,
             source="router",
             target="core",
-            sub_target="hub",
+            sub_target="psm",
             tag="DNS_INGRESS",
             color="#38bdf8",
-            detail="CoreDNS (:53) + Nginx Ingress (:80) -> Resolving iot.homelab to 192.168.25.101",
+            detail=f"CoreDNS (:53) + Nginx Ingress (:80) -> Resolve *.homelab / *.tailscale.homelab ({lan_ip})",
         )
-        asyncio.create_task(_delay_broadcast(0.35, "router", "hub", "VHOST_IOT", "#34d399", "Ingress :80 -> ProxyPass to HeatpressHub Web (:8088)"))
-        asyncio.create_task(_delay_broadcast(0.60, "router", "psm", "VHOST_PSM", "#a78bfa", "Ingress :80 -> ProxyPass to PSM Console (:3005)"))
+        asyncio.create_task(_delay_broadcast(0.30, "router", "psm", "VHOST_PSM", "#a78bfa", "Ingress :80 -> ProxyPass psm.homelab -> psm-web:3005"))
+        asyncio.create_task(_delay_broadcast(0.55, "router", "grafana", "VHOST_GRAF", "#f43f5e", "Ingress :80 -> ProxyPass grafana.homelab -> grafana:3000"))
+        asyncio.create_task(_delay_broadcast(0.75, "router", "apps", "VHOST_APP", "#34d399", "Ingress :80 -> ProxyPass deployed *.homelab apps / 503 Maintenance"))
 
     elif action == "stock":
         traffic_broadcaster.record_and_broadcast(
@@ -180,15 +184,16 @@ async def simulate_api_action(payload: SimulateRequest) -> Dict[str, Any]:
             path="/api/v1/stock/transactions",
             status=201,
             duration_ms=3.1,
-            client_ip=payload.client_ip or "192.168.25.101",
-            source="stock",
+            client_ip=payload.client_ip or lan_ip,
+            source="apps",
             target="core",
             sub_target="mysql",
             tag="STOCK_POS",
             color="#fbbf24",
-            detail="Kasir POS -> POST /api/v1/stock/transactions [Order #TRX-8821 Rp 145.000]",
+            detail="Stock UMKM / POS -> POST /api/v1/stock/transactions [Order #TRX-8821]",
         )
-        asyncio.create_task(_delay_broadcast(0.4, "core", "mysql", "MYSQL_WRITE", "#fbbf24", "Core -> MySQL stock_umkm [INSERT INTO transactions]"))
+        asyncio.create_task(_delay_broadcast(0.35, "core", "mysql", "MYSQL_WRITE", "#fbbf24", "Core -> MySQL 8.4 :3306 [stock_umkm / fadb]"))
+        asyncio.create_task(_delay_broadcast(0.65, "core", "minio", "S3_ASSET", "#22d3ee", "App / Core -> MinIO Silo S3 :9000 [bucket=stock-umkm]"))
 
     elif action == "psm_deploy":
         traffic_broadcaster.record_and_broadcast(
@@ -196,15 +201,50 @@ async def simulate_api_action(payload: SimulateRequest) -> Dict[str, Any]:
             path="/api/v1/deployments/git",
             status=200,
             duration_ms=4.8,
-            client_ip=payload.client_ip or "192.168.25.101:3005",
+            client_ip=payload.client_ip or f"{lan_ip}:3005",
             source="psm",
             target="core",
             sub_target="postgres",
             tag="PSM_DEPLOY",
             color="#a78bfa",
-            detail="PSM Console (:3005) -> POST /api/v1/deployments/git [Release v1.2]",
+            detail="PSM Console (:3005/:8001) + psm-agent -> Build & Deploy Project Container",
         )
-        asyncio.create_task(_delay_broadcast(0.4, "core", "postgres", "PG_SYNC", "#60a5fa", "Core -> PostgreSQL psm [UPDATE project_status SET active]"))
+        asyncio.create_task(_delay_broadcast(0.32, "core", "postgres", "PG_SYNC", "#60a5fa", "Core -> PostgreSQL psm :5432 [Update project & deployment state]"))
+        asyncio.create_task(_delay_broadcast(0.60, "core", "router", "VHOST_REG", "#38bdf8", "Core DNS -> Register *.homelab Nginx VHost + CoreDNS reload"))
+        asyncio.create_task(_delay_broadcast(0.85, "core", "minio", "S3_WIRE", "#22d3ee", "psm-agent -> Auto-wire MinIO S3 bucket & credentials"))
+
+    elif action == "minio_s3":
+        traffic_broadcaster.record_and_broadcast(
+            method="PUT",
+            path="/api/v1/integrations/minio/health",
+            status=200,
+            duration_ms=1.9,
+            client_ip=payload.client_ip or lan_ip,
+            source="apps",
+            target="core",
+            sub_target="minio",
+            tag="MINIO_S3",
+            color="#22d3ee",
+            detail="Homelab Apps -> MinIO Silo S3 (:9000/:9002) & Redis (:6379) Cache",
+        )
+        asyncio.create_task(_delay_broadcast(0.35, "core", "minio", "S3_BUCKET", "#22d3ee", "MinIO S3 :9000 [images, stock-umkm, homelab-storage, backups]"))
+
+    elif action == "health_check":
+        traffic_broadcaster.record_and_broadcast(
+            method="GET",
+            path="/metrics",
+            status=200,
+            duration_ms=1.1,
+            client_ip="prometheus",
+            source="prometheus",
+            target="core",
+            sub_target="grafana",
+            tag="HEALTH_SCRAPE",
+            color="#f59e0b",
+            detail="Prometheus (:9090) <- Scrape /metrics (pap-api, psm-api, node-exporter, cadvisor, telegraf)",
+        )
+        asyncio.create_task(_delay_broadcast(0.35, "prometheus", "grafana", "GRAF_DASH", "#f43f5e", "Grafana (:3000) <- Query Prometheus + Uptime Kuma (:3001) probes"))
+        asyncio.create_task(_delay_broadcast(0.60, "router", "core", "HEALTH_OK", "#34d399", "Nginx :80 -> GET /health & /api/v1/system/central-pulse"))
 
     elif action == "backup":
         traffic_broadcaster.record_and_broadcast(
@@ -212,16 +252,17 @@ async def simulate_api_action(payload: SimulateRequest) -> Dict[str, Any]:
             path="/api/v1/backups/create",
             status=200,
             duration_ms=6.2,
-            client_ip=payload.client_ip or "192.168.25.101",
-            source="hub",
+            client_ip=payload.client_ip or lan_ip,
+            source="psm",
             target="core",
             sub_target="postgres",
             tag="BACKUP_ENG",
             color="#f43f5e",
-            detail="Disaster Recovery Engine -> Snapshotting DB & Configs",
+            detail="Disaster Recovery Engine -> Snapshotting DB, Configs & MinIO S3 Vault",
         )
-        asyncio.create_task(_delay_broadcast(0.4, "core", "postgres", "PG_DUMP", "#60a5fa", "Core -> PostgreSQL :5432 [pg_dump psm, pap_core]"))
-        asyncio.create_task(_delay_broadcast(0.4, "core", "mysql", "MYSQL_DUMP", "#f59e0b", "Core -> MySQL :3306 [mysqldump eternal_db, stock_umkm]"))
+        asyncio.create_task(_delay_broadcast(0.30, "core", "postgres", "PG_DUMP", "#60a5fa", "Core -> PostgreSQL :5432 [pg_dump pap_core, psm, eternal_iot, nextcloud]"))
+        asyncio.create_task(_delay_broadcast(0.55, "core", "mysql", "MYSQL_DUMP", "#fbbf24", "Core -> MySQL :3306 [mysqldump fadb, stock_umkm]"))
+        asyncio.create_task(_delay_broadcast(0.85, "core", "minio", "S3_VAULT", "#22d3ee", "Core -> MinIO S3 :9000 [Upload SHA-256 .tar.gz to s3://backups/pap/]"))
 
     return {
         "status": "success",

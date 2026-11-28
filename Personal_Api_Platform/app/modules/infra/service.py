@@ -18,11 +18,13 @@ from app.integrations.mysql import MySQLReadOnlyAdapter
 from app.integrations.prometheus import PrometheusAdapter
 from app.integrations.psm import PsmAdapter
 from app.modules.backups.service import BackupService
+from app.modules.dns.service import DnsService
 from app.modules.infra.schemas import (
     DockerOverview,
     ServerMetrics,
 )
 from app.modules.integrations.models import Integration
+from app.modules.projects.models import Project
 from app.modules.traffic.broadcaster import traffic_broadcaster
 
 
@@ -174,9 +176,12 @@ class InfraService:
                 "nextcloud": lambda: _check_tcp_any([("nextcloud", 80), (lan_ip, 8080), ("127.0.0.1", 8080)], t_out),
                 "minio": lambda: bool(MinioS3Adapter(timeout=t_out).check_health().get("reachable")),
                 "cadvisor": lambda: _check_tcp_any([("cadvisor", 8080), (lan_ip, 8081)], t_out),
+                "node_exporter": lambda: _check_tcp_any([("node-exporter", 9100), (lan_ip, 9100)], t_out),
                 "telegraf": lambda: _check_tcp_any([("telegraf", 9273), (lan_ip, 9273)], t_out),
                 "homelab_router": lambda: _check_tcp_any([("homelab_router", 80), ("homelab-router", 80), (lan_ip, 80)], t_out),
+                "homelab_dns": lambda: _check_tcp_any([("homelab_dns", 53), ("homelab-dns", 53), (lan_ip, 53)], t_out),
                 "psm": lambda: bool(PsmAdapter(timeout=t_out).check_health().get("reachable")),
+                "psm_web": lambda: _check_tcp_any([("psm-web", 3005), (lan_ip, 3005), ("127.0.0.1", 3005)], t_out),
             }
             raw = hub_cache.run_parallel(tasks, timeout=1.2)
             out: Dict[str, str] = {"pap_core": "healthy"}
@@ -209,9 +214,116 @@ class InfraService:
             "services": services,
         }
 
-    def get_central_pulse(self) -> Dict[str, Any]:
+    def _get_iot_pipeline_status(self) -> Dict[str, Any]:
+        enable_mqtt = os.getenv("ENABLE_MQTT_CONSUMER", "true").lower() in ("true", "1", "yes")
+        try:
+            from app.services.mqtt_influx_consumer import mqtt_influx_consumer
+            return {
+                "mode": "in_process_consumer" if enable_mqtt else "decoupled_worker",
+                "running": bool(mqtt_influx_consumer.is_running),
+                "connected": bool(mqtt_influx_consumer.connected),
+                "host": getattr(mqtt_influx_consumer, "host", "mosquitto"),
+                "port": int(getattr(mqtt_influx_consumer, "port", 1883)),
+                "target_db": getattr(self.settings, "IOT_POSTGRES_DB", "eternal_iot"),
+                "messages_count": int(getattr(mqtt_influx_consumer, "messages_count", 0)),
+                "last_topic": getattr(mqtt_influx_consumer, "last_topic", None),
+                "last_message_at": getattr(mqtt_influx_consumer, "last_message_at", None),
+                "tracked_devices_count": len(getattr(mqtt_influx_consumer, "devices_last_seen", {})),
+            }
+        except Exception:
+            return {
+                "mode": "in_process_consumer" if enable_mqtt else "decoupled_worker",
+                "running": False,
+                "connected": False,
+                "host": getattr(self.settings, "MQTT_HOST", "mosquitto"),
+                "port": int(getattr(self.settings, "MQTT_PORT", 1883)),
+                "target_db": getattr(self.settings, "IOT_POSTGRES_DB", "eternal_iot"),
+                "messages_count": 0,
+                "last_topic": None,
+                "last_message_at": None,
+                "tracked_devices_count": 0,
+            }
+
+    def _get_dns_ingress_summary(self) -> Dict[str, Any]:
+        def _collect() -> Dict[str, Any]:
+            try:
+                dns_status = DnsService.check_dns_status()
+                all_domains = DnsService.list_domains()
+                project_routes = [d for d in all_domains if not d.get("is_system")]
+                maintenance_count = sum(1 for d in project_routes if d.get("maintenance_mode"))
+                return {
+                    **dns_status,
+                    "project_routes": project_routes,
+                    "project_routes_count": len(project_routes),
+                    "maintenance_count": maintenance_count,
+                }
+            except Exception:
+                return {
+                    "dns_server_port_53": "INITIALIZING",
+                    "ingress_router_port_80": "INITIALIZING",
+                    "host_lan_ip": getattr(self.settings, "SERVER_LAN_IP", "192.168.25.105"),
+                    "host_tailscale_ip": getattr(self.settings, "SERVER_TS_IP", "100.78.113.53"),
+                    "domain_zone": ".homelab",
+                    "total_domains_active": 0,
+                    "project_routes": [],
+                    "project_routes_count": 0,
+                    "maintenance_count": 0,
+                }
+
+        return hub_cache.get_or_compute(
+            "infra:dns_ingress_summary",
+            _collect,
+            ttl_sec=self.settings.HUB_CACHE_TTL_SECONDS,
+            stale_ttl_sec=self.settings.HUB_STALE_TTL_SECONDS,
+        )
+
+    def _get_projects_registry(self, project_routes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        route_by_slug: Dict[str, Dict[str, Any]] = {}
+        for r in project_routes:
+            dom = str(r.get("domain", ""))
+            slug_guess = dom.split(".")[0].replace("_", "-")
+            route_by_slug[slug_guess] = r
+
+        items: List[Dict[str, Any]] = []
+        seen_slugs = set()
+        try:
+            rows = self.db.query(Project).order_by(Project.name.asc()).all()
+            for p in rows:
+                seen_slugs.add(p.slug)
+                route = route_by_slug.get(p.slug) or route_by_slug.get(p.slug.replace("_", "-"))
+                items.append({
+                    "slug": p.slug,
+                    "name": p.name,
+                    "status": p.status,
+                    "description": p.description,
+                    "domain": route.get("domain") if route else None,
+                    "url": route.get("url") if route else None,
+                    "tailscale_url": route.get("tailscale_url") if route else None,
+                    "maintenance_mode": bool(route.get("maintenance_mode")) if route else False,
+                })
+        except Exception:
+            pass
+
+        for slug_guess, r in route_by_slug.items():
+            if slug_guess not in seen_slugs:
+                items.append({
+                    "slug": slug_guess,
+                    "name": r.get("description") or r.get("domain"),
+                    "status": "maintenance" if r.get("maintenance_mode") else "deployed",
+                    "description": f"Deployed Virtual Host -> {r.get('target')}",
+                    "domain": r.get("domain"),
+                    "url": r.get("url"),
+                    "tailscale_url": r.get("tailscale_url"),
+                    "maintenance_mode": bool(r.get("maintenance_mode")),
+                })
+        return items
+
+    def get_central_pulse(self, force_refresh: bool = False) -> Dict[str, Any]:
         """Real-time Central Gateway responsiveness, topology traffic, S3 backup vault & ecosystem pulse."""
-        overview = self.get_overview()
+        if force_refresh:
+            hub_cache.invalidate("infra:")
+
+        overview = self.get_overview(force_refresh=force_refresh)
         traffic_stats = traffic_broadcaster.get_stats()
         backup_flow = hub_cache.get_or_compute(
             "infra:backup_flow_summary",
@@ -222,6 +334,12 @@ class InfraService:
         psm_cfg = self._get_synced_psm_config()
         services_map = overview["services"]
         healthy_services = sum(1 for v in services_map.values() if v == "healthy")
+        services_list = self.list_services()
+        dns_ingress = self._get_dns_ingress_summary()
+        iot_pipeline = self._get_iot_pipeline_status()
+        projects_registry = self._get_projects_registry(dns_ingress.get("project_routes", []))
+        lan_ip = getattr(self.settings, "SERVER_LAN_IP", "192.168.25.105")
+        ts_ip = getattr(self.settings, "SERVER_TS_IP", "100.78.113.53")
 
         return {
             "gateway": {
@@ -232,7 +350,10 @@ class InfraService:
                 "cache_ttl_seconds": self.settings.HUB_CACHE_TTL_SECONDS,
                 "total_requests": traffic_stats.get("total_requests", 0),
                 "avg_latency_ms": traffic_stats.get("avg_latency_ms", 0.8),
-                "ws_subscribers": traffic_stats.get("active_ws_clients", 0),
+                "ws_subscribers": traffic_stats.get("connected_ws_clients", 0),
+                "sse_subscribers": traffic_stats.get("active_sse_subscribers", 0),
+                "lan_ip": lan_ip,
+                "tailscale_ip": ts_ip,
             },
             "server": overview["server"],
             "docker": overview["docker"],
@@ -241,6 +362,19 @@ class InfraService:
                 "healthy": healthy_services,
                 "total": len(services_map),
                 "items": services_map,
+            },
+            "services": services_list,
+            "dns_ingress": dns_ingress,
+            "iot_pipeline": iot_pipeline,
+            "projects_registry": projects_registry,
+            "storage_vault": {
+                "s3_url": f"http://{lan_ip}:9000",
+                "s3_tailscale_url": f"http://{ts_ip}:9000",
+                "console_url": f"http://{lan_ip}:9002",
+                "console_tailscale_url": f"http://{ts_ip}:9002",
+                "buckets": ["images", "stock-umkm", "homelab-storage", "backups"],
+                "reachable": services_map.get("minio") == "healthy",
+                "redis_status": overview["databases"].get("redis", "standby"),
             },
             "psm_coordination": {
                 "last_synced_at": psm_cfg.get("last_synced_at"),
@@ -280,139 +414,61 @@ class InfraService:
 
     def list_services(self) -> List[Dict[str, Any]]:
         lan_ip = getattr(self.settings, "SERVER_LAN_IP", "192.168.25.105")
+        ts_ip = getattr(self.settings, "SERVER_TS_IP", "100.78.113.53")
         services_status = self.get_services_status()
         db_status = self.get_databases_status()
 
+        def _svc(
+            name: str,
+            category: str,
+            port: int,
+            status: str,
+            scheme: str = "http",
+            domain: str | None = None,
+            path: str = "",
+            version: str | None = None,
+        ) -> Dict[str, Any]:
+            url = f"{scheme}://{lan_ip}:{port}{path}" if scheme else f"{lan_ip}:{port}"
+            ts_url = f"{scheme}://{ts_ip}:{port}{path}" if scheme else f"{ts_ip}:{port}"
+            ts_domain = None
+            if domain:
+                if domain == "http://homelab":
+                    ts_domain = "http://api.tailscale.homelab"
+                elif domain.endswith(".homelab"):
+                    ts_domain = domain.replace(".homelab", ".tailscale.homelab")
+            item: Dict[str, Any] = {
+                "name": name,
+                "category": category,
+                "port": port,
+                "url": url,
+                "tailscale_url": ts_url,
+                "status": status,
+                "reachable": status == "healthy",
+            }
+            if domain:
+                item["domain"] = domain
+            if ts_domain:
+                item["tailscale_domain"] = ts_domain
+            if version:
+                item["version"] = version
+            return item
+
         return [
-            {
-                "name": "pap-api",
-                "category": "Control Plane / Central API Gateway",
-                "port": 8000,
-                "url": f"http://{lan_ip}:8000",
-                "domain": "http://api.homelab",
-                "status": "healthy",
-                "reachable": True,
-                "version": self.settings.APP_VERSION,
-            },
-            {
-                "name": "psm-api",
-                "category": "Server Operations Layer",
-                "port": 8001,
-                "url": f"http://{lan_ip}:8001",
-                "domain": "http://psm-api.homelab",
-                "status": services_status.get("psm", "standby"),
-                "reachable": services_status.get("psm") == "healthy",
-            },
-            {
-                "name": "psm-web",
-                "category": "PSM Web Console",
-                "port": 3005,
-                "url": f"http://{lan_ip}:3005",
-                "domain": "http://psm.homelab",
-                "status": services_status.get("psm", "standby"),
-                "reachable": services_status.get("psm") == "healthy",
-            },
-            {
-                "name": "postgresql",
-                "category": "Core Platform Database (PG 16)",
-                "port": 5432,
-                "url": f"{lan_ip}:5432",
-                "status": db_status.get("postgresql", "healthy"),
-                "reachable": db_status.get("postgresql") == "healthy",
-            },
-            {
-                "name": "mysql",
-                "category": "Application Database (MySQL 8.4)",
-                "port": 3306,
-                "url": f"{lan_ip}:3306",
-                "status": db_status.get("mysql", "standby"),
-                "reachable": db_status.get("mysql") == "healthy",
-            },
-            {
-                "name": "redis",
-                "category": "In-Memory Cache & Queue",
-                "port": 6379,
-                "url": f"{lan_ip}:6379",
-                "status": db_status.get("redis", "standby"),
-                "reachable": db_status.get("redis") == "healthy",
-            },
-            {
-                "name": "minio",
-                "category": "S3 Object Storage & Backup Vault",
-                "port": 9002,
-                "url": f"http://{lan_ip}:9002",
-                "domain": "http://minio.homelab",
-                "status": services_status.get("minio", "standby"),
-                "reachable": services_status.get("minio") == "healthy",
-            },
-            {
-                "name": "nextcloud",
-                "category": "Personal Cloud Storage & Office",
-                "port": 8080,
-                "url": f"http://{lan_ip}:8080",
-                "domain": "http://nextcloud.homelab",
-                "status": services_status.get("nextcloud", "standby"),
-                "reachable": services_status.get("nextcloud") == "healthy",
-            },
-            {
-                "name": "prometheus",
-                "category": "Time-Series Metrics TSDB",
-                "port": 9090,
-                "url": f"http://{lan_ip}:9090",
-                "domain": "http://prometheus.homelab",
-                "status": services_status.get("prometheus", "standby"),
-                "reachable": services_status.get("prometheus") == "healthy",
-            },
-            {
-                "name": "grafana",
-                "category": "Observability Dashboards",
-                "port": 3000,
-                "url": f"http://{lan_ip}:3000",
-                "domain": "http://grafana.homelab",
-                "status": services_status.get("grafana", "standby"),
-                "reachable": services_status.get("grafana") == "healthy",
-            },
-            {
-                "name": "cadvisor",
-                "category": "Container Resource Metrics",
-                "port": 8081,
-                "url": f"http://{lan_ip}:8081",
-                "domain": "http://cadvisor.homelab",
-                "status": services_status.get("cadvisor", "standby"),
-                "reachable": services_status.get("cadvisor") == "healthy",
-            },
-            {
-                "name": "uptime-kuma",
-                "category": "SLA & Uptime Monitor",
-                "port": 3001,
-                "url": f"http://{lan_ip}:3001",
-                "domain": "http://status.homelab",
-                "status": services_status.get("uptime_kuma", "standby"),
-                "reachable": services_status.get("uptime_kuma") == "healthy",
-            },
-            {
-                "name": "mosquitto",
-                "category": "IoT MQTT Message Broker",
-                "port": 1883,
-                "url": f"mqtt://{lan_ip}:1883",
-                "status": services_status.get("mqtt", "standby"),
-                "reachable": services_status.get("mqtt") == "healthy",
-            },
-            {
-                "name": "telegraf",
-                "category": "IoT MQTT-to-Prometheus Collector",
-                "port": 9273,
-                "url": f"http://{lan_ip}:9273/metrics",
-                "status": services_status.get("telegraf", "standby"),
-                "reachable": services_status.get("telegraf") == "healthy",
-            },
-            {
-                "name": "homelab-router",
-                "category": "Nginx Ingress Reverse Proxy",
-                "port": 80,
-                "url": f"http://{lan_ip}",
-                "domain": "http://homelab",
-                "status": services_status.get("homelab_router", "standby"),
-                "reachable": services_status.get("homelab_router") == "healthy",
-            },
+            _svc("pap-api", "Control Plane / Central API Gateway", 8000, "healthy", domain="http://api.homelab", version=self.settings.APP_VERSION),
+            _svc("psm-api", "Server Operations Layer", 8001, services_status.get("psm", "standby"), domain="http://psm-api.homelab"),
+            _svc("psm-web", "PSM Web Console", 3005, services_status.get("psm_web", services_status.get("psm", "standby")), domain="http://psm.homelab"),
+            _svc("postgresql", "Core Platform Database (PG 16)", 5432, db_status.get("postgresql", "healthy"), scheme=""),
+            _svc("mysql", "Application Database (MySQL 8.4)", 3306, db_status.get("mysql", "standby"), scheme=""),
+            _svc("redis", "In-Memory Cache & Queue", 6379, db_status.get("redis", "standby"), scheme=""),
+            _svc("minio", "S3 Object Storage & Backup Vault", 9002, services_status.get("minio", "standby"), domain="http://minio.homelab"),
+            _svc("nextcloud", "Personal Cloud Storage & Office", 8080, services_status.get("nextcloud", "standby"), domain="http://nextcloud.homelab"),
+            _svc("prometheus", "Time-Series Metrics TSDB", 9090, services_status.get("prometheus", "standby"), domain="http://prometheus.homelab"),
+            _svc("grafana", "Observability Dashboards", 3000, services_status.get("grafana", "standby"), domain="http://grafana.homelab"),
+            _svc("cadvisor", "Container Resource Metrics", 8081, services_status.get("cadvisor", "standby"), domain="http://cadvisor.homelab"),
+            _svc("node-exporter", "Host System Metrics Exporter", 9100, services_status.get("node_exporter", "standby"), path="/metrics"),
+            _svc("uptime-kuma", "SLA & Uptime Monitor", 3001, services_status.get("uptime_kuma", "standby"), domain="http://kuma.homelab"),
+            _svc("mosquitto", "IoT MQTT Message Broker", 1883, services_status.get("mqtt", "standby"), scheme="mqtt"),
+            _svc("telegraf", "IoT MQTT-to-Prometheus Collector", 9273, services_status.get("telegraf", "standby"), path="/metrics"),
+            _svc("homelab-router", "Nginx Ingress Reverse Proxy", 80, services_status.get("homelab_router", "standby"), domain="http://homelab"),
+            _svc("homelab-dns", "CoreDNS Local Resolver", 53, services_status.get("homelab_dns", "standby"), scheme=""),
         ]

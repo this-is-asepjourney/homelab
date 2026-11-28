@@ -122,7 +122,14 @@ class RequestContextAndSecurityMiddleware(BaseHTTPMiddleware):
         try:
             path_str = request.url.path
             if not (
-                path_str.startswith(("/api/v1/traffic", "/api/v1/system/worker-heartbeat", "/api/v1/system/worker-status", "/metrics"))
+                path_str.startswith((
+                    "/api/v1/traffic",
+                    "/api/v1/system/worker-heartbeat",
+                    "/api/v1/system/worker-status",
+                    "/api/v1/system/central-pulse",
+                    "/api/v1/system/services",
+                    "/metrics",
+                ))
                 or path_str.endswith(("/favicon.ico", ".map", ".png", ".jpg"))
             ):
                 from app.modules.traffic.broadcaster import traffic_broadcaster

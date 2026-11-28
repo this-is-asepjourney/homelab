@@ -325,6 +325,14 @@ class DnsService:
         return domain
 
     @classmethod
+    def _to_tailscale_domain(cls, domain: str) -> str:
+        if domain == "homelab":
+            return "api.tailscale.homelab"
+        if domain.endswith(".homelab"):
+            return domain.replace(".homelab", ".tailscale.homelab")
+        return domain
+
+    @classmethod
     def list_domains(cls) -> List[Dict[str, Any]]:
         """List all active domains (built-in + deployed projects)."""
         results = []
@@ -333,9 +341,12 @@ class DnsService:
 
         # 1. Built-in system domains
         for svc in BUILTIN_SERVICES:
+            ts_domain = cls._to_tailscale_domain(svc["domain"])
             results.append({
                 "domain": svc["domain"],
                 "url": f"http://{svc['domain']}",
+                "tailscale_domain": ts_domain,
+                "tailscale_url": f"http://{ts_domain}",
                 "target": svc["target"],
                 "category": svc["type"],
                 "description": svc["desc"],
@@ -359,9 +370,12 @@ class DnsService:
                         raw_target = proxy_match.group(1) if proxy_match else upstream_match.group(1)
                         proxy_target = raw_target.replace("http://", "").strip()
                         is_maint = "MAINTENANCE MODE" in text
+                        ts_domain = cls._to_tailscale_domain(primary_domain)
                         results.append({
                             "domain": primary_domain,
                             "url": f"http://{primary_domain}",
+                            "tailscale_domain": ts_domain,
+                            "tailscale_url": f"http://{ts_domain}",
                             "target": proxy_target,
                             "category": "Project App",
                             "description": f"Deployed Project ({conf_file.stem})",

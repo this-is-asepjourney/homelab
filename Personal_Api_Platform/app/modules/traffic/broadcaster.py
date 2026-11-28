@@ -127,29 +127,31 @@ class TrafficBroadcaster:
         threading.Thread(target=_send, daemon=True).start()
 
     def _classify_source(self, client_ip: str, path: str) -> str:
-        if "192.168.25.104" in client_ip or path.startswith("/api/nfc") or "/devices" in path:
+        if "192.168.25.104" in client_ip or path.startswith("/api/nfc") or "/devices" in path or "/iot" in path:
             return "esp32"
-        if ":3005" in client_ip or path.startswith(("/api/v1/projects", "/api/v1/servers", "/api/v1/containers", "/api/v1/deployments", "/ws/servers")):
+        if ":3005" in client_ip or path.startswith(("/api/v1/projects", "/api/v1/servers", "/api/v1/containers", "/api/v1/deployments", "/api/v1/psm", "/psm/api", "/ws/servers")):
             return "psm"
         if path.startswith(("/api/v1/stock", "/stock")):
-            return "stock"
+            return "apps"
         if path.startswith("/metrics") or "Prometheus" in client_ip:
-            return "grafana"
+            return "prometheus"
         if path.startswith("/api/v1/backups"):
-            return "hub"
+            return "core"
         if path.startswith("/api/v1/dns"):
-            return "psm"
-        return "hub"
+            return "router"
+        return "apps"
 
     def _classify_sub_target(self, path: str) -> Optional[str]:
-        if path.startswith("/api/v1/stock") or "/nfc" in path:
+        if path.startswith("/api/v1/stock"):
             return "mysql"
-        if "/influx" in path or "/telemetry" in path:
-            return "influxdb"
-        if path.startswith(("/api/v1/projects", "/api/v1/servers", "/api/v1/auth", "/api/v1/users", "/api/v1/deployments")):
+        if "/nfc" in path or "/telemetry" in path or "/iot" in path:
+            return "postgres"
+        if path.startswith(("/api/v1/projects", "/api/v1/servers", "/api/v1/auth", "/api/v1/users", "/api/v1/deployments", "/api/v1/infra")):
             return "postgres"
         if path.startswith("/api/v1/backups"):
-            return "postgres"
+            return "minio"
+        if "/dns" in path:
+            return "router"
         if "/mqtt" in path or "/devices" in path:
             return "mqtt"
         if "/metrics" in path:
@@ -160,35 +162,38 @@ class TrafficBroadcaster:
         if status >= 400:
             return "ERR_HTTP"
         if "/nfc" in path:
-            return "NFC_REAL"
+            return "NFC_PG"
         if "/stock" in path:
             return "STOCK_API"
         if "/projects" in path or "/deployments" in path:
             return "PSM_CORE"
-        if "/devices" in path:
+        if "/devices" in path or "/iot" in path:
             return "IOT_FLEET"
         if "/backups" in path:
-            return "BACKUP_ENG"
+            return "S3_BACKUP"
         if "/metrics" in path:
             return "PROM_SCRAPE"
         if "/dns" in path:
             return "LOCAL_DNS"
+        if "/infra" in path or "/central-pulse" in path:
+            return "CENTRAL_HUB"
         return "API_REAL"
 
     def _classify_color(self, source: str, sub_target: Optional[str], status: int) -> str:
         if status >= 400:
             return "#ef4444"
         colors = {
-            "esp32": "#38bdf8",     # Sky blue
-            "hub": "#34d399",       # Emerald green
-            "stock": "#fbbf24",     # Amber
-            "psm": "#a78bfa",       # Purple
-            "grafana": "#f43f5e",   # Rose
-            "mysql": "#f59e0b",     # Orange
-            "postgres": "#60a5fa",  # Indigo/Blue
-            "mqtt": "#06b6d4",      # Cyan
-            "influxdb": "#c084fc",  # Purple TSDB
-            "router": "#38bdf8",    # Sky Blue Ingress
+            "esp32": "#38bdf8",      # Sky blue
+            "apps": "#34d399",       # Emerald green
+            "core": "#3b82f6",       # Royal blue
+            "psm": "#a78bfa",        # Purple
+            "grafana": "#f43f5e",    # Rose
+            "prometheus": "#f59e0b", # Amber
+            "mysql": "#fbbf24",      # Gold
+            "postgres": "#60a5fa",   # Blue
+            "mqtt": "#06b6d4",       # Cyan
+            "minio": "#22d3ee",      # Cyan/S3
+            "router": "#38bdf8",     # Sky Blue Ingress
         }
         return colors.get(source, "#3b82f6")
 
