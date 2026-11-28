@@ -290,7 +290,7 @@ services:
     image: grafana/grafana:latest
     container_name: grafana
     restart: unless-stopped
-    mem_limit: 256m
+    mem_limit: 640m
     logging: *default-logging
     depends_on:
       - prometheus
@@ -298,9 +298,13 @@ services:
       - mysql
     environment:
       TZ: ${TZ:-Asia/Jakarta}
+      GOMEMLIMIT: "512MiB"
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-fadb}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-wokeh123}
       GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
       POSTGRES_USER: ${POSTGRES_USER:-fadb}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-wokeh123}
       MYSQL_USER: ${MYSQL_USER:-fadb}
